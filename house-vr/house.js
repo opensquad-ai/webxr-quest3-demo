@@ -25,6 +25,7 @@ const WALK_SPEED = 1.9;
 const TURN_DEG = 30;
 const REACH = 2.6;                 // how far a held prop may be carried from the head
 const GRAVITY = 9.8;
+const MAX_FALL_TIME = 3.0;        // a released prop never stays airborne longer than this
 
 const el = {
   hud: document.getElementById('hud'),
@@ -197,8 +198,13 @@ for (const mesh of propMeshes) {
     home: mesh.position.clone(),
     homeQuat: mesh.quaternion.clone(),
     value: 0, open: false, on: spec.kind !== 'toggle' ? null : (spec.id === 'tv' ? false : true),
-    held: null, vel: new THREE.Vector3(), free: false,
+    held: null, vel: new THREE.Vector3(), free: false, freeFor: 0,
   };
+  // Half-height measured once, at build time. Recomputing a Box3 per frame after
+  // release returned a box cached at the prop's original position, so a dropped
+  // prop could settle at the wrong height or never settle at all.
+  if (!mesh.userData.bb) mesh.userData.bb = new THREE.Box3().setFromObject(mesh);
+  rec.half = (mesh.userData.bb.max.y - mesh.userData.bb.min.y) / 2;
   if (spec.kind === 'hinge') rec.axis = new THREE.Vector3(0, 1, 0);
   if (spec.kind === 'slide') rec.dir = new THREE.Vector3(spec.dir[0], 0, -spec.dir[1]).normalize();
   if (spec.light) {
@@ -490,9 +496,12 @@ function onSelectEnd(info) {
     state.held = null;
     rec.held = null;
     rec.free = true;
-    // carry the controller's motion into the throw
-    rec.mesh.getWorldPosition(tmpV);
-    rec.vel.copy(info.obj.getWorldPosition(new THREE.Vector3()).sub(rec.prevPos || tmpV).multiplyScalar(6));
+    rec.freeFor = 0;
+    // Drop, do not throw. This used to derive velocity from (controller world pos
+    // - prop world pos), which is the grab offset - half a metre to two metres -
+    // times six, i.e. 10+ m/s straight through the nearest wall, where the prop
+    // then stuck. A released prop now just falls from where it was.
+    rec.vel.set(0, 0, 0);
     state.interactions += 1;
     return;
   }
@@ -572,13 +581,10 @@ function setLamp(id, on) {
   state.lampsOn = Object.values(state.props).filter((p) => p.light && p.on).length;
 }
 
-// grab / slide / hinge follow the controller. Zero allocations per frame.
+// grab follows the controller. Zero allocations per frame.
 function updateHeld(rec) {
   const info = rec.held;
   if (!info) return;
-  rec.mesh.getWorldPosition(tmpV3);
-  if (rec.prevPos) rec.prevPos.copy(tmpV3); else rec.prevPos = tmpV3.clone();
-
   if (rec.kind !== 'grab') return;     // hinge and slide are discrete now
 
   info.obj.getWorldPosition(tmpV);
@@ -593,21 +599,19 @@ function updateHeld(rec) {
 
 function updateFree(rec, dt) {
   if (!rec.free) return;
+  rec.freeFor = (rec.freeFor || 0) + dt;
   rec.vel.y -= GRAVITY * dt;
+  if (rec.vel.lengthSq() > 36) rec.vel.setLength(6);       // never exceed 6 m/s
   rec.mesh.position.addScaledVector(rec.vel, dt);
-  const bb = boxOf(rec);
-  const half = (bb.max.y - bb.min.y) / 2;
+  const half = rec.half || 0.05;                            // fixed at build time
   const c = rec.mesh.position;
-  const support = supportAt(c.x, c.z, c.y);
-  if (c.y - half <= support) {
+  let support = supportAt(c.x, c.z, c.y + half);
+  if (support < -4) support = state.floorZ;                 // nothing under it: settle on the floor
+  if (c.y - half <= support || rec.freeFor > MAX_FALL_TIME) {
     c.y = support + half;
-    if (Math.abs(rec.vel.y) < 0.6 && rec.vel.length() < 0.8) {
-      rec.vel.set(0, 0, 0);
-      rec.free = false;
-    } else {
-      rec.vel.y = -rec.vel.y * 0.25;
-      rec.vel.x *= 0.6; rec.vel.z *= 0.6;
-    }
+    rec.vel.set(0, 0, 0);
+    rec.free = false;
+    rec.freeFor = 0;
   }
 }
 
@@ -985,6 +989,27 @@ const startZ = -modelJson.entry.y - 0.6;      // inside the house means three.z 
         return stickIntent();
       },
       ui: () => ({ intro: intro.visible, hint: hintSprite.visible, hintText }),
+      // Release a prop from a given height and run the fall for `frames` steps.
+      // This is the exact path that used to leave a prop stuck in a wall.
+      dropTest: (id, x, y, z, frames) => {
+        const rec = state.props[id];
+        if (!rec) return null;
+        const before = rec.mesh.position.clone();
+        rec.mesh.position.set(x, y, z);
+        rec.held = null;
+        rec.free = true;
+        rec.freeFor = 0;
+        rec.vel.set(0, 0, 0);
+        for (let i = 0; i < (frames || 240); i++) updateFree(rec, 1 / 72);
+        const after = rec.mesh.position;
+        return {
+          from: [x, y, z],
+          to: [+after.x.toFixed(3), +after.y.toFixed(3), +after.z.toFixed(3)],
+          settled: !rec.free,
+          drift: +Math.hypot(after.x - x, after.z - z).toFixed(3),
+          home: [+before.x.toFixed(3), +before.y.toFixed(3), +before.z.toFixed(3)],
+        };
+      },
       // Probe the teleport solver as if a controller sat at `origin` looking along
       // `dir`. Used to prove that aiming through a wall is refused.
       teleportProbe: (origin, dir) => {
