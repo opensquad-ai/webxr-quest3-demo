@@ -1,0 +1,71 @@
+{
+ "glb": "conbini.glb",
+ "bytes": 243708,
+ "tris": 2880,
+ "shading": "vertexColor",
+ "floorZ": 0.15,
+ "roadZ": 0.0,
+ "wallTopZ": 4.2,
+ "clearH": 3.0,
+ "footprint": [
+  32.0,
+  28.0
+ ],
+ "entry": {
+  "x": 0.0,
+  "y": -6.0
+ },
+ "rooms": {
+  "Street": {
+   "label": "街道",
+   "x": [
+    -16.0,
+    16.0
+   ],
+   "y": [
+    -12.0,
+    0.0
+   ]
+  },
+  "Store": {
+   "label": "店内",
+   "x": [
+    -5.7,
+    3.7
+   ],
+   "y": [
+    0.3,
+    7.7
+   ]
+  },
+  "Alley": {
+   "label": "小巷",
+   "x": [
+    4.0,
+    8.0
+   ],
+   "y": [
+    -3.0,
+    7.7
+   ]
+  }
+ },
+ "exported": [
+  "Web_Conbini",
+  "Ground",
+  "Glass_East",
+  "Glass_West",
+  "Itc_auto_door_l",
+  "Itc_auto_door_r",
+  "Itc_bin_lid",
+  "Itc_coffee",
+  "Itc_fridge_door",
+  "Itc_lamp_inside_1",
+  "Itc_lamp_inside_2",
+  "Itc_oden_lid",
+  "Itc_register",
+  "Itc_sign_light",
+  "Itc_street_lamp",
+  "Itc_vending"
+ ]
+}
