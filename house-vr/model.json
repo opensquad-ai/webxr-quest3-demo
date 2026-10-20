@@ -1,0 +1,100 @@
+{
+ "glb": "house.glb",
+ "bytes": 241076,
+ "tris": 3376,
+ "atlas": "house_atlas_2048",
+ "floorZ": 0.42,
+ "wallTopZ": 3.1999999999999997,
+ "clearH": 2.78,
+ "footprint": [
+  12.0,
+  9.0
+ ],
+ "entry": {
+  "x": -3.0,
+  "y": -4.5
+ },
+ "rooms": {
+  "Living": {
+   "label": "客厅 / 餐厅",
+   "x": [
+    -5.75,
+    1.0
+   ],
+   "y": [
+    -4.25,
+    0.8
+   ]
+  },
+  "Kitchen": {
+   "label": "厨房",
+   "x": [
+    1.12,
+    5.75
+   ],
+   "y": [
+    -4.25,
+    0.8
+   ]
+  },
+  "Bedroom": {
+   "label": "主卧",
+   "x": [
+    -5.75,
+    0.8
+   ],
+   "y": [
+    0.92,
+    4.25
+   ]
+  },
+  "Study": {
+   "label": "书房",
+   "x": [
+    0.92,
+    3.4
+   ],
+   "y": [
+    0.92,
+    4.25
+   ]
+  },
+  "Bath": {
+   "label": "卫浴",
+   "x": [
+    3.52,
+    5.75
+   ],
+   "y": [
+    0.92,
+    4.25
+   ]
+  }
+ },
+ "exported": [
+  "Web_House",
+  "Ground",
+  "Glass_East",
+  "Glass_North",
+  "Glass_South",
+  "Glass_West",
+  "Itc_apple",
+  "Itc_bath_door",
+  "Itc_bedside_lamp",
+  "Itc_book",
+  "Itc_cup",
+  "Itc_cushion",
+  "Itc_drawer_kitchen",
+  "Itc_drawer_nightstand",
+  "Itc_floor_lamp",
+  "Itc_lamp_bath",
+  "Itc_lamp_bedroom",
+  "Itc_lamp_kitchen",
+  "Itc_lamp_living",
+  "Itc_lamp_study",
+  "Itc_pillow",
+  "Itc_remote",
+  "Itc_tv",
+  "Itc_wardrobe_door"
+ ]
+}
