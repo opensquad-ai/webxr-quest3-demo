@@ -36,10 +36,27 @@ self.addEventListener('activate', (e) => {
 //    link is only paid once.
 const NETWORK_FIRST = /(?:house\.js|index\.html|\/)$/;
 
+// three.js comes from unpkg: cross-origin, but immutable-versioned. The first cold
+// load costs ~30 s on a throttled link, every one after that should be free.
+const CDN = /(^|\.)unpkg\.com$/;
+
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
-  if (url.origin !== self.location.origin) return;
+  const sameOrigin = url.origin === self.location.origin;
+  if (!sameOrigin && !CDN.test(url.hostname)) return;
+  if (!sameOrigin) {
+    e.respondWith(
+      caches.match(e.request).then((hit) => hit || fetch(e.request).then((res) => {
+        if (res && (res.ok || res.type === 'opaque')) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, copy));
+        }
+        return res;
+      }))
+    );
+    return;
+  }
 
   if (NETWORK_FIRST.test(url.pathname)) {
     e.respondWith(
