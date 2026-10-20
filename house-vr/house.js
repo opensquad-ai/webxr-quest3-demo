@@ -4,9 +4,10 @@
 // surfaces and every interactable prop are derived from house_params.py through
 // colliders.json, so the physics can never drift away from the mesh.
 //
-// Rendering: the baked architecture uses MeshBasicMaterial (unlit) — what the
-// bake captured is what the headset shows, with no realtime shadow cost. Props
-// use MeshLambertMaterial so toggled lamps actually affect them.
+// Rendering: the atlas holds albedo only (no baked direct/indirect light) and the
+// shell is drawn with MeshLambertMaterial, so a hemisphere light plus the seven
+// switchable point lights actually relight the room at runtime. Toggling a lamp
+// therefore changes the walls around it, not just the lamp shade.
 //
 // Coordinates: colliders.json is authored in Blender (x, y, z-up); glTF is Y-up,
 // so every box is converted once at load:
@@ -47,6 +48,11 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'hi
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+// The albedo atlas is bright by design and a ceiling point light sits <1 m from
+// the ceiling plane, so raw linear output blows the ceiling to flat white. ACES
+// keeps the highlight rolloff and the slight exposure lift restores the mid-tones.
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
 renderer.xr.enabled = true;
 document.body.appendChild(renderer.domElement);
 
@@ -62,9 +68,18 @@ scene.add(dolly);
 const world = new THREE.Group();      // holds the loaded house + props
 scene.add(world);
 
-// ambient for the lit props only; the baked shell ignores lights entirely
-const hemi = new THREE.HemisphereLight(0xdfeaff, 0x3a3226, 1.15);
+// Base fill for the whole shell. Down-facing surfaces (every ceiling) read the
+// ground colour outright, so it is a warm light grey rather than the near-black
+// of open ground - otherwise every ceiling renders as stained wood.
+const hemi = new THREE.HemisphereLight(0xdfeaff, 0xa89f92, 0.95);
 scene.add(hemi);
+const fill = new THREE.AmbientLight(0xfff4e6, 0.40);
+scene.add(fill);
+
+// The lamp energies in colliders.json are authored for a path-traced bake; in a
+// Lambert shader a ceiling light 0.6 m from the ceiling at 26 cd is ~70x over
+// white. Scale them at build time instead of editing the shared source of truth.
+const LAMP_SCALE = 0.28;
 
 const state = {
   phase: 'loading', mode: 'teleport', feetY: 0, floorZ: 0, stepMax: 0.2,
@@ -74,8 +89,34 @@ const state = {
 };
 
 // ------------------------------------------------------------------- loading
-const worldJson = await fetch('./colliders.json').then((r) => r.json());
-const modelJson = await fetch('./model.json').then((r) => r.json());
+// All four assets start downloading immediately (the atlas alone used to take a
+// minute over a throttled link, and serial awaits turned that into minutes).
+const setLoad = (msg) => {
+  const o = document.getElementById('overlay');
+  if (o) o.textContent = msg;
+};
+const done = {};
+const mark = (what) => { done[what] = true; setLoad('加载中：' + Object.keys(done).join(' · ') + ' …'); };
+
+const worldJsonP = fetch('./colliders.json').then((r) => r.json());
+const modelJsonP = fetch('./model.json').then((r) => r.json());
+setLoad('加载中：碰撞数据 · 纹理 · 模型 …');
+const atlasTexP = new Promise((resolve, reject) => {
+  new THREE.TextureLoader().load('./textures/house_atlas.webp', (t) => {
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
+    resolve(t);
+  }, undefined, reject);
+});
+const gltfP = new Promise((resolve, reject) => {
+  new GLTFLoader().load('./house.glb', resolve,
+    (e) => { if (e.lengthComputable) setLoad(`加载中：房屋模型 ${Math.round(e.loaded / e.total * 100)}% …`); },
+    reject);
+});
+
+const [worldJson, modelJson, atlasTex, gltf] =
+  await Promise.all([worldJsonP, modelJsonP, atlasTexP, gltfP]);
+['碰撞', '纹理', '模型'].forEach(mark);
 state.floorZ = worldJson.meta.floor_z;
 state.stepMax = worldJson.meta.step_max;
 
@@ -93,20 +134,8 @@ state.rooms = Object.entries(worldJson.rooms).map(([k, r]) => ({
   key: k, label: r.label, x0: r.x[0], x1: r.x[1], z0: -r.y[1], z1: -r.y[0], y: r.z + SHIFT,
 }));
 
-const atlasTex = await new Promise((resolve, reject) => {
-  new THREE.TextureLoader().load('./textures/house_atlas.webp', (t) => {
-    t.colorSpace = THREE.SRGBColorSpace;
-    t.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
-    resolve(t);
-  }, undefined, reject);
-});
-
-const gltf = await new Promise((resolve, reject) => {
-  new GLTFLoader().load('./house.glb', resolve, undefined, reject);
-});
-
-const houseMat = new THREE.MeshBasicMaterial({ map: atlasTex });
-const groundMat = new THREE.MeshBasicMaterial({ map: makeGroundTexture() });
+const houseMat = new THREE.MeshLambertMaterial({ map: atlasTex });
+const groundMat = new THREE.MeshLambertMaterial({ map: makeGroundTexture() });
 const glassMat = new THREE.MeshBasicMaterial({
   color: 0xbcd6f0, transparent: true, opacity: 0.22, depthWrite: false,
 });
@@ -181,10 +210,10 @@ for (const mesh of propMeshes) {
   if (spec.light) {
     const room = state.rooms.find((r) => r.label === worldJson.rooms[spec.light.room].label);
     const bb = boxOf(mesh);
-    const light = new THREE.PointLight(0xffd9a8, spec.light.energy, 6.5, 2);
+    const light = new THREE.PointLight(0xffd9a8, spec.light.energy * LAMP_SCALE, 6.5, 2);
     light.position.set(bb.min.x + (bb.max.x - bb.min.x) / 2, bb.min.y - 0.12,
                        bb.min.z + (bb.max.z - bb.min.z) / 2);
-    light.userData.base = spec.light.energy;
+    light.userData.base = spec.light.energy * LAMP_SCALE;
     scene.add(light);
     rec.light = light;
     rec.on = true;
@@ -637,8 +666,16 @@ async function enterVR() {
     return true;
   } catch (err) {
     el.enter.disabled = false;
-    el.status.textContent = `进入 VR 失败：${err.message || err}`;
-    log(`enterVR 失败: ${err.message || err}`);
+    const msg = String(err.message || err);
+    // A desktop browser with no headset says "not supported" / "no XR hardware":
+    // that is not a failure to nag about, it simply means desktop preview mode.
+    if (/not supported|unsupported|no XR|NotFound|NotSupported|secure context/i.test(msg)) {
+      state.xrUnsupported = true;
+    }
+    el.status.textContent = state.xrUnsupported
+      ? '桌面预览：WASD 移动 · 按住拖动转视角 · 点击家具交互（接头显后点「进入 VR」）'
+      : `进入 VR 失败：${msg}`;
+    log(`enterVR 失败: ${msg}`);
     return false;
   }
 }
@@ -678,7 +715,10 @@ window.addEventListener('resize', () => {
 const startX = modelJson.entry.x;
 const startZ = -modelJson.entry.y - 0.6;      // inside the house means three.z < 4.25
 {
-  const g = groundAt(startX, startZ, 0.1) || state.floors[0];
+  // From 1.0 m, not 0.1: the yard region overlaps the whole footprint at y=0, and
+  // searching from just above the ground makes it win over the 0.42 m house
+  // floor, which starts the player sunk into the floor.
+  const g = groundAt(startX, startZ, 1.0) || state.floors[0];
   dolly.position.set(startX, 0, startZ);
   state.feetY = g ? g.y : 0;
   state.phase = 'desktop';
@@ -713,9 +753,16 @@ const startZ = -modelJson.entry.y - 0.6;      // inside the house means three.z 
     },
   };
   if (!navigator.xr) {
-    el.status.textContent = '此浏览器不支持 WebXR；已进入桌面预览';
+    state.xrUnsupported = true;
+    el.status.textContent = '此浏览器不支持 WebXR；桌面预览：WASD 移动 · 按住拖动转视角 · 点击家具交互';
   } else {
     const ok = await enterVR();
-    if (!ok) armGestureRetry();
+    // Only auto-retry when the failure might be a missing user gesture; a browser
+    // with no headset would otherwise replay the error on every single click.
+    if (!ok && !state.xrUnsupported) armGestureRetry();
   }
+}
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
 }

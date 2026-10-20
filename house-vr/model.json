@@ -1,7 +1,7 @@
 {
  "glb": "house.glb",
- "bytes": 241076,
- "tris": 3376,
+ "bytes": 251228,
+ "tris": 3520,
  "atlas": "house_atlas_2048",
  "floorZ": 0.42,
  "wallTopZ": 3.1999999999999997,
