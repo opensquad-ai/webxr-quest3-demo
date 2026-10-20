@@ -196,7 +196,7 @@ for (const mesh of propMeshes) {
     id, spec, mesh, kind: spec.kind, label: spec.label,
     home: mesh.position.clone(),
     homeQuat: mesh.quaternion.clone(),
-    value: 0, on: spec.kind !== 'toggle' ? null : (spec.id === 'tv' ? false : true),
+    value: 0, open: false, on: spec.kind !== 'toggle' ? null : (spec.id === 'tv' ? false : true),
     held: null, vel: new THREE.Vector3(), free: false,
   };
   if (spec.kind === 'hinge') rec.axis = new THREE.Vector3(0, 1, 0);
@@ -220,6 +220,12 @@ setLamp('lamp_living', true);       // apply initial on/off look
 // ------------------------------------------------------------------- controls
 const tmpV = new THREE.Vector3();
 const tmpQ = new THREE.Quaternion();
+// Scratch objects for the per-frame prop update. Allocating a few Vector3 per
+// frame per held prop is what makes the room hitch as soon as you pick something up.
+const tmpV2 = new THREE.Vector3();
+const tmpV3 = new THREE.Vector3();
+const tmpQ2 = new THREE.Quaternion();
+const tmpQ3 = new THREE.Quaternion();
 const raycaster = new THREE.Raycaster();
 
 const controllers = [0, 1].map((index) => {
@@ -235,18 +241,20 @@ const controllers = [0, 1].map((index) => {
   dolly.add(grip);
   grip.add(new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.04, 0.12),
                           new THREE.MeshBasicMaterial({ color: 0x223044 })));
-  const info = { index, obj, grip, ray, gamepad: null, active: false, hover: null, held: null };
+  const info = { index, obj, grip, ray, gamepad: null, hand: 'none',
+                 active: false, hover: null, held: null, hoverAt: -1 };
   // three.js dispatches XR events without setting event.currentTarget, so every
   // handler closes over `info` instead of reading it off the event.
   obj.addEventListener('connected', (e) => {
     info.gamepad = e.data.gamepad || null;
+    info.hand = e.data.handedness || 'none';
     info.active = true;
     log(`手柄已连接: ${e.data.handedness}`);
   });
-  obj.addEventListener('disconnected', () => { info.active = false; info.gamepad = null; });
+  obj.addEventListener('disconnected', () => { info.active = false; info.gamepad = null; info.hand = 'none'; });
   obj.addEventListener('selectstart', () => onSelectStart(info));
   obj.addEventListener('selectend', () => onSelectEnd(info));
-  obj.addEventListener('squeezestart', () => toggleMode());
+  obj.addEventListener('squeezestart', () => recenter());
   return info;
 });
 
@@ -261,27 +269,186 @@ const marker = new THREE.Group();
   scene.add(marker);
 }
 
+// ------------------------------------------------------- floating hint label
+// A label pinned above whatever you are aiming at. The wrist panel carries the
+// same text, but it is easy to miss with your hand down by your side, and the
+// whole point of the prompt is telling you the trigger does something.
+const hintCanvas = document.createElement('canvas');
+hintCanvas.width = 512; hintCanvas.height = 128;
+const hctx = hintCanvas.getContext('2d');
+const hintTex = new THREE.CanvasTexture(hintCanvas);
+hintTex.colorSpace = THREE.SRGBColorSpace;
+const hintSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+  map: hintTex, transparent: true, depthTest: false, depthWrite: false,
+}));
+hintSprite.scale.set(0.62, 0.155, 1);
+hintSprite.renderOrder = 999;
+hintSprite.visible = false;
+scene.add(hintSprite);
+
+let hintText = '';
+let hintUntil = 0;
+let hintTarget = null;
+
+function drawHint(text) {
+  if (text === hintText) return;
+  hintText = text;
+  hctx.clearRect(0, 0, 512, 128);
+  if (text) {
+    hctx.fillStyle = 'rgba(8,14,28,0.88)';
+    hctx.beginPath();
+    if (hctx.roundRect) hctx.roundRect(6, 20, 500, 88, 44); else hctx.rect(6, 20, 500, 88);
+    hctx.fill();
+    hctx.strokeStyle = 'rgba(46,230,168,0.8)';
+    hctx.lineWidth = 3;
+    hctx.stroke();
+    hctx.fillStyle = '#eaf6ff';
+    hctx.font = 'bold 38px system-ui, sans-serif';
+    hctx.textAlign = 'center';
+    hctx.textBaseline = 'middle';
+    hctx.fillText(text, 256, 64);
+  }
+  hintTex.needsUpdate = true;
+}
+
+// sticky = keep showing for `seconds` even after the crosshair moves away.
+function showHint(text, rec, seconds) {
+  drawHint(text);
+  hintTarget = rec || null;
+  hintUntil = performance.now() + (seconds || 0) * 1000;
+  hintSprite.visible = !!text;
+}
+
+function verbFor(rec) {
+  if (rec.kind === 'toggle') return rec.id === 'tv' ? '换台' : (rec.on ? '关灯' : '开灯');
+  if (rec.kind === 'grab') return '拿起';
+  return rec.open ? '关闭' : '打开';
+}
+
+function updateHint(hoverRec) {
+  const now = performance.now();
+  if (now > hintUntil) {
+    hintTarget = hoverRec || null;
+    if (hoverRec) showHint(`扳机 · ${verbFor(hoverRec)}`, hoverRec, 0);
+    else { hintSprite.visible = false; hintText = ''; return; }
+  }
+  if (!hintSprite.visible) return;
+  if (hintTarget && hintTarget.mesh) {
+    hintSprite.position.copy(hintTarget.mesh.position);
+    hintSprite.position.y += 0.26;
+  } else {
+    headCam().getWorldPosition(tmpV);
+    hintSprite.position.copy(tmpV).setY(tmpV.y + 0.1);
+  }
+}
+
+// ------------------------------------------------------------- intro panel
+const introCanvas = document.createElement('canvas');
+introCanvas.width = 768; introCanvas.height = 512;
+{
+  const g = introCanvas.getContext('2d');
+  g.fillStyle = 'rgba(10,17,32,0.94)';
+  if (g.roundRect) { g.beginPath(); g.roundRect(0, 0, 768, 512, 28); g.fill(); }
+  else g.fillRect(0, 0, 768, 512);
+  g.strokeStyle = 'rgba(46,230,168,0.5)'; g.lineWidth = 4; g.stroke();
+  g.textAlign = 'center';
+  g.fillStyle = '#2ee6a8'; g.font = 'bold 46px system-ui, sans-serif';
+  g.fillText('星轨小屋', 384, 86);
+  g.fillStyle = '#9fb4d8'; g.font = '24px system-ui, sans-serif';
+  g.fillText('Quest 3 房屋走查', 384, 126);
+  g.textAlign = 'left';
+  const rows = [
+    ['右摇杆', '前后左右走动'],
+    ['左摇杆左右', '转身'],
+    ['扳机', '开门 / 拉抽屉 / 开关灯 / 拿起小物件'],
+    ['扳机指地面', '瞬移到该处'],
+    ['握把键', '重置提示'],
+  ];
+  let y = 188;
+  for (const [k, v] of rows) {
+    g.fillStyle = '#ffd479'; g.font = 'bold 30px system-ui, sans-serif';
+    g.fillText(k, 72, y);
+    g.fillStyle = '#e8eefc'; g.font = '28px system-ui, sans-serif';
+    g.fillText(v, 300, y);
+    y += 52;
+  }
+  g.textAlign = 'center';
+  g.fillStyle = '#2ee6a8'; g.font = 'bold 28px system-ui, sans-serif';
+  g.fillText('按扳机开始', 384, 474);
+}
+const introTex = new THREE.CanvasTexture(introCanvas);
+introTex.colorSpace = THREE.SRGBColorSpace;
+const intro = new THREE.Mesh(
+  new THREE.PlaneGeometry(1.02, 0.68),
+  new THREE.MeshBasicMaterial({ map: introTex, transparent: true, depthTest: false, depthWrite: false }),
+);
+intro.renderOrder = 1000;
+intro.visible = false;
+scene.add(intro);
+
+function placeIntro() {
+  headCam().getWorldPosition(tmpV);
+  headCam().getWorldQuaternion(tmpQ);
+  tmpV2.set(0, 0, -1).applyQuaternion(tmpQ);
+  intro.position.copy(tmpV).addScaledVector(tmpV2, 1.35);
+  intro.lookAt(tmpV);
+}
+
+
 let aiming = null;
 
-function hitFor(info) {
+// Cached once: getObjectByName() walked the whole scene on every controller, every
+// frame, and then raycast 1649 triangles of house shell twice per frame. That was
+// the stutter - it got worse the moment you grabbed something, because the hover
+// pass kept running while the physics step also allocated per frame.
+let houseMesh = null;
+function getHouseMesh() {
+  if (!houseMesh) houseMesh = world.getObjectByName('Web_House');
+  return houseMesh;
+}
+
+const RAY_DIR = new THREE.Vector3();
+const HOVER_EVERY = 3;          // frames between hover raycasts, per hand
+let frameNo = 0;
+
+function hitFor(info, wantWall) {
   info.obj.getWorldPosition(tmpV);
   info.obj.getWorldQuaternion(tmpQ);
-  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(tmpQ).normalize();
-  raycaster.set(tmpV, dir);
+  RAY_DIR.set(0, 0, -1).applyQuaternion(tmpQ).normalize();
+  raycaster.set(tmpV, RAY_DIR);
   raycaster.far = 12;
-  const propHits = raycaster.intersectObjects(propMeshes, false);
-  const wallHits = raycaster.intersectObjects([world.getObjectByName('Web_House')].filter(Boolean), false);
-  const prop = propHits[0], wall = wallHits[0];
-  if (prop && (!wall || prop.distance < wall.distance + 0.05)) return { type: 'prop', rec: state.props[prop.object.userData.propId], distance: prop.distance };
+  // Aiming at props only needs the 18 prop meshes. The shell is only tested when
+  // a teleport needs to know where the wall is, which happens on release.
+  const prop = raycaster.intersectObjects(propMeshes, false)[0];
+  if (!wantWall) {
+    return prop ? { type: 'prop', rec: state.props[prop.object.userData.propId], distance: prop.distance } : null;
+  }
+  const house = getHouseMesh();
+  const wall = house ? raycaster.intersectObject(house, false)[0] : null;
+  if (prop && (!wall || prop.distance < wall.distance + 0.05)) {
+    return { type: 'prop', rec: state.props[prop.object.userData.propId], distance: prop.distance };
+  }
   if (wall) return { type: 'wall', distance: wall.distance };
   return null;
 }
 
 function onSelectStart(info) {
+  // The intro panel eats the first trigger press, so you dismiss it and act with
+  // the same button instead of hunting for a separate one.
+  if (intro && intro.visible) {
+    intro.visible = false;
+    state.introDone = true;
+    log('操作面板已关闭');
+    return;
+  }
   const hit = hitFor(info);
   if (hit && hit.type === 'prop' && hit.rec) {
     const rec = hit.rec;
     if (rec.kind === 'toggle') { actToggle(rec); return; }
+    // Doors, wardrobe doors and drawers open on a trigger tap. Dragging them with
+    // a held trigger worked, but it read as "nothing happens" because the object
+    // only moves while you keep pressing and waving your arm.
+    if (rec.kind === 'hinge' || rec.kind === 'slide') { actuate(rec); return; }
     info.held = rec;
     state.held = rec;
     rec.held = info;
@@ -294,10 +461,25 @@ function onSelectStart(info) {
     log(`拿起：${rec.label}`);
     return;
   }
-  if (state.mode === 'teleport') {
-    aiming = info;
-    info.ray.visible = true;
+  aiming = info;
+  info.ray.visible = true;
+}
+
+// Discrete open / close for hinges and sliders.
+function actuate(rec) {
+  if (rec.kind === 'slide') {
+    rec.value = rec.value > 0.01 ? 0 : rec.spec.travel;
+    rec.mesh.position.copy(rec.home).addScaledVector(rec.dir, rec.value);
+  } else if (rec.kind === 'hinge') {
+    const open = THREE.MathUtils.degToRad(rec.spec.openDeg);
+    rec.value = rec.value > 0.01 ? 0 : open;
+    rec.mesh.rotation.set(0, rec.value, 0);
   }
+  rec.open = rec.value > 0.01;
+  state.interactions += 1;
+  const verb = rec.open ? '打开' : '关闭';
+  log(`${rec.label} ${verb}`);
+  showHint(`${rec.label} · ${verb}`, rec, 1.2);
 }
 
 function onSelectEnd(info) {
@@ -316,7 +498,7 @@ function onSelectEnd(info) {
   if (aiming !== info) return;
   aiming = null;
   const target = computeTeleport(info);
-  info.ray.visible = state.mode === 'teleport';
+  info.ray.visible = true;
   if (target) {
     dolly.position.set(target.x, 0, target.z);
     state.feetY = target.y;
@@ -368,40 +550,23 @@ function setLamp(id, on) {
   state.lampsOn = Object.values(state.props).filter((p) => p.light && p.on).length;
 }
 
-// prop actuation: slide / hinge follow the held controller
+// grab / slide / hinge follow the controller. Zero allocations per frame.
 function updateHeld(rec) {
   const info = rec.held;
   if (!info) return;
-  rec.prevPos = rec.mesh.getWorldPosition(new THREE.Vector3());
-  if (rec.kind === 'grab') {
-    info.obj.getWorldPosition(tmpV);
-    const head = renderer.xr.isPresenting ? renderer.xr.getCamera().getWorldPosition(new THREE.Vector3())
-                                          : dolly.position.clone().setY(state.feetY + 1.6);
-    if (tmpV.distanceTo(head) > REACH) tmpV.sub(head).setLength(REACH).add(head);
-    const q = info.obj.getWorldQuaternion(new THREE.Quaternion());
-    rec.mesh.position.copy(tmpV).add(rec.grabOffset.clone().applyQuaternion(q));
-    rec.mesh.quaternion.copy(q).multiply(rec.grabOffsetQ);
-    return;
-  }
-  if (rec.kind === 'slide') {
-    const p = info.obj.getWorldPosition(new THREE.Vector3());
-    const rel = p.clone().sub(rec.home.clone().add(world.position)).projectOnVector(rec.dir);
-    const t = THREE.MathUtils.clamp(rel.length() * Math.sign(rel.dot(rec.dir) || 1), 0, rec.spec.travel);
-    rec.value = t;
-    rec.mesh.position.copy(rec.home).addScaledVector(rec.dir, t);
-    return;
-  }
-  if (rec.kind === 'hinge') {
-    const pivot = rec.home.clone();
-    const p = info.obj.getWorldPosition(new THREE.Vector3()).sub(pivot);
-    const want = Math.atan2(p.x, -p.z);
-    const base = Math.atan2(rec.grabOffset.x, -rec.grabOffset.z);
-    let a = want - base;
-    a = THREE.MathUtils.euclideanModulo(a + Math.PI, Math.PI * 2) - Math.PI;
-    const max = THREE.MathUtils.degToRad(rec.spec.openDeg);
-    rec.value = THREE.MathUtils.clamp(Math.abs(a) > max ? (a > 0 ? max : 0) : Math.max(0, a), 0, max);
-    rec.mesh.rotation.set(0, rec.value, 0);
-  }
+  rec.mesh.getWorldPosition(tmpV3);
+  if (rec.prevPos) rec.prevPos.copy(tmpV3); else rec.prevPos = tmpV3.clone();
+
+  if (rec.kind !== 'grab') return;     // hinge and slide are discrete now
+
+  info.obj.getWorldPosition(tmpV);
+  const head = renderer.xr.isPresenting
+    ? renderer.xr.getCamera().getWorldPosition(tmpV2)
+    : tmpV2.copy(dolly.position).setY(state.feetY + 1.6);
+  if (tmpV.distanceTo(head) > REACH) tmpV.sub(head).setLength(REACH).add(head);
+  info.obj.getWorldQuaternion(tmpQ);
+  rec.mesh.position.copy(tmpV).add(tmpV3.copy(rec.grabOffset).applyQuaternion(tmpQ));
+  rec.mesh.quaternion.copy(tmpQ).multiply(rec.grabOffsetQ);
 }
 
 function updateFree(rec, dt) {
@@ -477,10 +642,29 @@ function roomAt(x, z, y) {
   return y > -0.1 ? '室内' : '室外';
 }
 
-function toggleMode() {
-  state.mode = state.mode === 'teleport' ? 'smooth' : 'teleport';
-  for (const c of controllers) c.ray.visible = state.mode === 'teleport';
-  log(`移动方式：${state.mode === 'teleport' ? '扳机瞬移' : '摇杆平滑移动'}`);
+// Right stick walks, left stick turns. Kept as a pure function of the controller
+// state so it can be exercised with fake gamepads in the browser test - it is the
+// one piece of XR behaviour that cannot be checked from a desktop run.
+function stickIntent() {
+  let mx = 0, mz = 0, turn = 0;
+  for (const c of controllers) {
+    const gp = c.gamepad;
+    if (!gp || !gp.axes) continue;
+    const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
+    if (c.hand === 'right') {
+      if (Math.hypot(ax, ay) > 0.18) { mx = ax; mz = -ay; }
+    } else if (c.hand === 'left') {
+      if (Math.abs(ax) > 0.22) turn = ax;
+    }
+  }
+  return { mx, mz, turn };
+}
+
+// Squeeze re-centres the view and reports the room on the wrist panel; the old
+// teleport/smooth toggle is gone because both sticks are always live now.
+function recenter() {
+  log(`已重置视角 · 位置 ${roomAt(dolly.position.x, dolly.position.z, state.feetY)}`);
+  showHint('视角已重置', null, 0.9);
 }
 
 // ------------------------------------------------------------- desktop fallback
@@ -507,14 +691,10 @@ function desktopAct(e) {
   const propHits = raycaster.intersectObjects(propMeshes, false);
   if (propHits.length) {
     const rec = state.props[propHits[0].object.userData.propId];
-    if (rec && rec.kind === 'toggle') { actToggle(rec); return; }
-    if (rec) {
-      rec.value = rec.kind === 'slide' ? (rec.value > 0.01 ? 0 : rec.spec.travel)
-                                       : (rec.value > 0.01 ? 0 : THREE.MathUtils.degToRad(rec.spec.openDeg));
-      if (rec.kind === 'slide') rec.mesh.position.copy(rec.home).addScaledVector(rec.dir, rec.value);
-      if (rec.kind === 'hinge') rec.mesh.rotation.set(0, rec.value, 0);
-      state.interactions += 1;
-    }
+    if (!rec) return;
+    if (rec.kind === 'toggle') actToggle(rec);
+    else if (rec.kind === 'grab') { showHint(`拿起：${rec.label}`, null, 0.8); }
+    else actuate(rec);
   }
 }
 
@@ -552,7 +732,7 @@ function drawPanel(hoverLabel) {
   g.strokeStyle = 'rgba(120,180,255,0.4)'; g.lineWidth = 2; g.stroke();
   g.textAlign = 'left';
   g.fillStyle = '#2ee6a8'; g.font = 'bold 32px system-ui, sans-serif';
-  g.fillText(state.mode === 'teleport' ? '瞬移模式' : '平滑移动', 26, 54);
+  g.fillText('右摇杆 移动 · 左摇杆 转身', 26, 54);
   g.fillStyle = '#e8eefc'; g.font = '26px system-ui, sans-serif';
   g.fillText(`所在  ${roomAt(dolly.position.x, dolly.position.z, state.feetY)}`, 26, 100);
   g.fillStyle = '#9fb4d8'; g.font = '22px system-ui, sans-serif';
@@ -565,7 +745,7 @@ function drawPanel(hoverLabel) {
 }
 
 function draw2d(hoverLabel) {
-  el.mode.textContent = state.mode === 'teleport' ? '瞬移（扳机）' : '平滑（左摇杆）';
+  el.mode.textContent = '摇杆';
   el.room.textContent = roomAt(dolly.position.x, dolly.position.z, state.feetY);
   el.hint.textContent = hoverLabel ? `瞄准：${hoverLabel}` : `灯 ${state.lampsOn} 盏亮`;
 }
@@ -573,6 +753,7 @@ function draw2d(hoverLabel) {
 // ---------------------------------------------------------------------- loop
 const headCam = () => (renderer.xr.isPresenting ? renderer.xr.getCamera() : camera);
 let last = performance.now();
+let introPlaced = false;
 
 renderer.setAnimationLoop((t) => {
   const dt = Math.min(0.05, (t - last) / 1000);
@@ -581,25 +762,27 @@ renderer.setAnimationLoop((t) => {
 
   if (renderer.xr.isPresenting) {
     let mz = 0, mx = 0, turn = 0;
+    frameNo += 1;
     for (const c of controllers) {
-      const gp = c.gamepad;
-      if (gp && gp.axes) {
-        const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
-        if (Math.hypot(ax, ay) > 0.18) { mx = ax; mz = -ay; }
-        const tx = gp.axes[2] || 0, ty = gp.axes[3] || 0;
-        if (Math.hypot(tx, ty) > 0.6 && Math.abs(tx) > Math.abs(ty)) turn = tx;
+      // Hover raycasts are throttled: doing them for both hands every frame was the
+      // main per-frame cost, and it spiked exactly while holding an object.
+      if ((frameNo + c.index) % HOVER_EVERY === 0) {
+        const hit = hitFor(c);
+        c.hover = hit && hit.type === 'prop' ? hit.rec : null;
       }
-      const hit = hitFor(c);
-      c.hover = hit && hit.type === 'prop' ? hit.rec : null;
       if (c.hover && !hoverLabel) hoverLabel = c.hover.label;
     }
-    if (state.mode === 'smooth' && (mx || mz)) {
-      const q = headCam().getWorldQuaternion(new THREE.Quaternion());
-      const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(q); fwd.y = 0; fwd.normalize();
-      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(q); right.y = 0; right.normalize();
-      const v = fwd.multiplyScalar(mz).add(right.multiplyScalar(mx));
-      if (v.lengthSq() > 1e-6) v.normalize().multiplyScalar(WALK_SPEED * dt);
-      tryMove(v.x, v.z);
+    ({ mx, mz, turn } = stickIntent());
+    if (mx || mz) {
+      headCam().getWorldQuaternion(tmpQ);
+      tmpV.set(0, 0, -1).applyQuaternion(tmpQ); tmpV.y = 0;
+      tmpV2.set(1, 0, 0).applyQuaternion(tmpQ); tmpV2.y = 0;
+      if (tmpV.lengthSq() > 1e-6 && tmpV2.lengthSq() > 1e-6) {
+        tmpV.normalize(); tmpV2.normalize();
+        tmpV3.copy(tmpV).multiplyScalar(mz).addScaledVector(tmpV2, mx);
+        if (tmpV3.lengthSq() > 1e-6) tmpV3.normalize().multiplyScalar(WALK_SPEED * dt);
+        tryMove(tmpV3.x, tmpV3.z);
+      }
     }
     if (turn) dolly.rotation.y -= turn * THREE.MathUtils.degToRad(TURN_DEG) * Math.min(1, dt * 8);
     camera.rotation.set(0, 0, 0);
@@ -631,6 +814,13 @@ renderer.setAnimationLoop((t) => {
 
   drawPanel(hoverLabel);
   draw2d(hoverLabel);
+  // The intro card is placed once, in world space, so walking away leaves it behind
+  // instead of gluing it to your face.
+  if (intro.visible && !introPlaced && renderer.xr.isPresenting) { placeIntro(); introPlaced = true; }
+  if (renderer.xr.isPresenting) {
+    const hov = (controllers.find((c) => c.hover) || {}).hover || null;
+    updateHint(hov);
+  }
   renderer.render(scene, camera);
 });
 
@@ -655,7 +845,10 @@ async function enterVR() {
     el.fab.classList.add('hidden');
     el.status.textContent = '';
     state.phase = 'presenting';
-    for (const c of controllers) c.ray.visible = state.mode === 'teleport';
+    // Show the controls card on entry; the first trigger press dismisses it.
+    intro.visible = true;
+    introPlaced = false;
+    for (const c of controllers) c.ray.visible = true;
     log(`VR 会话已启动（${state.usingFloor ? 'local-floor' : 'local'} 参考空间）`);
     return true;
   } catch (err) {
@@ -730,19 +923,31 @@ const startZ = -modelJson.entry.y - 0.6;      // inside the house means three.z 
         const rec = state.props[id];
         if (!rec) return false;
         if (rec.kind === 'toggle') { actToggle(rec); return true; }
-        rec.value = rec.kind === 'slide' ? (rec.value > 0.01 ? 0 : rec.spec.travel)
-                                         : (rec.value > 0.01 ? 0 : THREE.MathUtils.degToRad(rec.spec.openDeg));
-        if (rec.kind === 'slide') rec.mesh.position.copy(rec.home).addScaledVector(rec.dir, rec.value);
-        if (rec.kind === 'hinge') rec.mesh.rotation.set(0, rec.value, 0);
-        state.interactions += 1;
-        return true;
+        if (rec.kind === 'hinge' || rec.kind === 'slide') { actuate(rec); return true; }
+        return false;
       },
       prop: (id) => {
         const rec = state.props[id];
         if (!rec) return null;
-        return { kind: rec.kind, value: +rec.value.toFixed(3), on: rec.on,
+        return { kind: rec.kind, value: +rec.value.toFixed(3), on: rec.on, open: !!rec.open,
                  pos: rec.mesh.position.toArray().map((v) => +v.toFixed(3)),
                  rotY: +rec.mesh.rotation.y.toFixed(3), lightVisible: rec.light ? rec.light.visible : null };
+      },
+      // Fake both gamepads so the stick mapping can be asserted without a headset.
+      sticks: (rightAxes, leftAxes) => {
+        for (const c of controllers) {
+          if (c.index === 0) { c.hand = 'left'; c.gamepad = leftAxes ? { axes: leftAxes } : null; }
+          else { c.hand = 'right'; c.gamepad = rightAxes ? { axes: rightAxes } : null; }
+        }
+        return stickIntent();
+      },
+      ui: () => ({ intro: intro.visible, hint: hintSprite.visible, hintText }),
+      // Median frame cost over N forced renders - the number that actually shows
+      // whether the hover raycast rework removed the hitch.
+      budget: (n) => {
+        const t0 = performance.now();
+        for (let i = 0; i < n; i++) renderer.render(scene, camera);
+        return +((performance.now() - t0) / n).toFixed(3);
       },
     },
   };
