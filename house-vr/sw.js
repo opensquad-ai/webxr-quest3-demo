@@ -1,4 +1,4 @@
-const CACHE = 'house-vr-v1';
+const CACHE = 'house-vr-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -8,7 +8,6 @@ const ASSETS = [
   './manifest.webmanifest',
   './icon-512.png',
   './house.glb',
-  './textures/house_atlas.webp',
   './vendor/three.module.js',
   './vendor/three.core.js',
   './vendor/GLTFLoader.js',
@@ -26,8 +25,8 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// Network-first: a redeployed bake must show up on the next launch, and the
-// cache is only the offline fallback for the 1 MB atlas.
+// Network-first: a redeployed build must show up on the next launch, and the
+// cache is only the offline fallback for the model and the three.js bundle.
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
   e.respondWith(

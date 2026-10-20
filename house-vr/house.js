@@ -4,10 +4,10 @@
 // surfaces and every interactable prop are derived from house_params.py through
 // colliders.json, so the physics can never drift away from the mesh.
 //
-// Rendering: the atlas holds albedo only (no baked direct/indirect light) and the
-// shell is drawn with MeshLambertMaterial, so a hemisphere light plus the seven
-// switchable point lights actually relight the room at runtime. Toggling a lamp
-// therefore changes the walls around it, not just the lamp shade.
+// Rendering: the shell carries one vertex colour per face (its material colour),
+// so it needs no texture at all. MeshLambertMaterial lights those colours with a
+// hemisphere light plus the seven switchable point lights, which is why toggling a
+// lamp changes the walls around it and not just the lamp shade.
 //
 // Coordinates: colliders.json is authored in Blender (x, y, z-up); glTF is Y-up,
 // so every box is converted once at load:
@@ -48,9 +48,9 @@ const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'hi
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
-// The albedo atlas is bright by design and a ceiling point light sits <1 m from
-// the ceiling plane, so raw linear output blows the ceiling to flat white. ACES
-// keeps the highlight rolloff and the slight exposure lift restores the mid-tones.
+// A ceiling point light sits <1 m above the ceiling plane, so raw linear output
+// blows it to flat white. ACES keeps the highlight rolloff and the slight
+// exposure lift restores the mid-tones.
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.15;
 renderer.xr.enabled = true;
@@ -89,8 +89,9 @@ const state = {
 };
 
 // ------------------------------------------------------------------- loading
-// All four assets start downloading immediately (the atlas alone used to take a
-// minute over a throttled link, and serial awaits turned that into minutes).
+// Nothing is serialised: the GLB and both JSON files start together. There is no
+// atlas any more - the shell carries its colours as vertex colours, which removed
+// a 222 KB image that took 26 s to arrive on a throttled link.
 const setLoad = (msg) => {
   const o = document.getElementById('overlay');
   if (o) o.textContent = msg;
@@ -100,23 +101,16 @@ const mark = (what) => { done[what] = true; setLoad('加载中：' + Object.keys
 
 const worldJsonP = fetch('./colliders.json').then((r) => r.json());
 const modelJsonP = fetch('./model.json').then((r) => r.json());
-setLoad('加载中：碰撞数据 · 纹理 · 模型 …');
-const atlasTexP = new Promise((resolve, reject) => {
-  new THREE.TextureLoader().load('./textures/house_atlas.webp', (t) => {
-    t.colorSpace = THREE.SRGBColorSpace;
-    t.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
-    resolve(t);
-  }, undefined, reject);
-});
+setLoad('加载中：碰撞数据 · 模型 …');
 const gltfP = new Promise((resolve, reject) => {
   new GLTFLoader().load('./house.glb', resolve,
     (e) => { if (e.lengthComputable) setLoad(`加载中：房屋模型 ${Math.round(e.loaded / e.total * 100)}% …`); },
     reject);
 });
 
-const [worldJson, modelJson, atlasTex, gltf] =
-  await Promise.all([worldJsonP, modelJsonP, atlasTexP, gltfP]);
-['碰撞', '纹理', '模型'].forEach(mark);
+const [worldJson, modelJson, gltf] =
+  await Promise.all([worldJsonP, modelJsonP, gltfP]);
+['碰撞', '模型'].forEach(mark);
 state.floorZ = worldJson.meta.floor_z;
 state.stepMax = worldJson.meta.step_max;
 
@@ -134,7 +128,7 @@ state.rooms = Object.entries(worldJson.rooms).map(([k, r]) => ({
   key: k, label: r.label, x0: r.x[0], x1: r.x[1], z0: -r.y[1], z1: -r.y[0], y: r.z + SHIFT,
 }));
 
-const houseMat = new THREE.MeshLambertMaterial({ map: atlasTex });
+const houseMat = new THREE.MeshLambertMaterial({ vertexColors: true });
 const groundMat = new THREE.MeshLambertMaterial({ map: makeGroundTexture() });
 const glassMat = new THREE.MeshBasicMaterial({
   color: 0xbcd6f0, transparent: true, opacity: 0.22, depthWrite: false,

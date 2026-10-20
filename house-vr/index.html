@@ -66,6 +66,16 @@
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.js" } }
 </script>
+<script>
+// Nothing in the page registered sw.js before, so the first load paid full price
+// every time. Registration makes the second launch instant; sw.js itself stays
+// network-first, so a redeploy still shows up.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
+}
+</script>
 <script type="module" src="./house.js"></script>
 </body>
 </html>

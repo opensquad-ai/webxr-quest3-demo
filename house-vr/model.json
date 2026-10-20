@@ -1,8 +1,8 @@
 {
  "glb": "house.glb",
- "bytes": 277212,
+ "bytes": 275336,
  "tris": 3520,
- "atlas": "house_atlas_2048",
+ "shading": "vertexColor",
  "floorZ": 0.42,
  "wallTopZ": 3.1999999999999997,
  "clearH": 2.78,
