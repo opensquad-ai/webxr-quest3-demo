@@ -94,17 +94,11 @@ state.rooms = Object.entries(worldJson.rooms).map(([k, r]) => ({
 }));
 
 const atlasTex = await new Promise((resolve, reject) => {
-  const l = new THREE.TextureLoader();
-  l.load('./textures/house_atlas.webp', (t) => {
+  new THREE.TextureLoader().load('./textures/house_atlas.webp', (t) => {
     t.colorSpace = THREE.SRGBColorSpace;
     t.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
     resolve(t);
-  }, undefined, () => {
-    l.load('./textures/house_atlas_2048.png', (t) => {
-      t.colorSpace = THREE.SRGBColorSpace;
-      resolve(t);
-    }, undefined, reject);
-  });
+  }, undefined, reject);
 });
 
 const gltf = await new Promise((resolve, reject) => {
