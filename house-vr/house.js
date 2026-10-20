@@ -86,7 +86,7 @@ const state = {
   phase: 'loading', mode: 'teleport', feetY: 0, floorZ: 0, stepMax: 0.2,
   boxes: [], floors: [], rooms: [], hover: null, held: null,
   teleports: 0, blocked: 0, interactions: 0, usingFloor: true,
-  props: {}, lampsOn: 0,
+  props: {}, lampsOn: 0, inputs: [], lastIntent: null,
 };
 
 // ------------------------------------------------------------------- loading
@@ -329,6 +329,70 @@ function verbFor(rec) {
   if (rec.kind === 'toggle') return rec.id === 'tv' ? '换台' : (rec.on ? '关灯' : '开灯');
   if (rec.kind === 'grab') return '拿起';
   return rec.open ? '关闭' : '打开';
+}
+
+// ------------------------------------------------------------ input debug card
+// Shown with ?debug=1. It prints what the runtime actually reports for each
+// controller, so "the stick does nothing" can be told apart from "the stick never
+// reached the page". Pinned to the lower right of the view.
+const dbgCanvas = document.createElement('canvas');
+dbgCanvas.width = 640; dbgCanvas.height = 200;
+const dctx = dbgCanvas.getContext('2d');
+const dbgTex = new THREE.CanvasTexture(dbgCanvas);
+dbgTex.colorSpace = THREE.SRGBColorSpace;
+const dbgSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+  map: dbgTex, transparent: true, depthTest: false, depthWrite: false,
+}));
+dbgSprite.scale.set(0.58, 0.18, 1);
+dbgSprite.renderOrder = 1002;
+dbgSprite.visible = false;
+scene.add(dbgSprite);
+
+const DEBUG = new URLSearchParams(location.search).has('debug');
+let dbgAt = 0;
+
+function drawDebug() {
+  const rows = (state.inputs && state.inputs.length) ? state.inputs : [];
+  dctx.clearRect(0, 0, 640, 200);
+  dctx.fillStyle = 'rgba(0,0,0,0.72)';
+  dctx.fillRect(0, 0, 640, 200);
+  dctx.fillStyle = '#2ee6a8';
+  dctx.font = 'bold 26px monospace';
+  dctx.fillText('input debug', 14, 34);
+  dctx.font = '22px monospace';
+  dctx.fillStyle = '#e8eefc';
+  dctx.fillText('        a0    a1    a2    a3   btn', 14, 72);
+  let y = 106;
+  for (const i of rows) {
+    dctx.fillStyle = i.hand === 'right' ? '#ffd479' : '#8ff0c8';
+    dctx.fillText(`${i.hand === 'right' ? 'R' : 'L'}  ` +
+      i.a.map((v) => String(v).padStart(5)).join(' ') + `   ${i.b}`, 14, y);
+    y += 34;
+  }
+  if (!rows.length) {
+    dctx.fillStyle = '#ff8080';
+    dctx.fillText('no gamepad reported', 14, 110);
+  }
+  dctx.fillStyle = '#7f9bc9';
+  dctx.font = '20px monospace';
+  dctx.fillText(`move ${state.lastIntent ? state.lastIntent.mx.toFixed(2) + ',' + state.lastIntent.mz.toFixed(2) : '-'}  turn ${state.lastIntent ? state.lastIntent.turn.toFixed(2) : '-'}`, 14, 186);
+  dbgTex.needsUpdate = true;
+}
+
+function updateDebug() {
+  if (!renderer.xr.isPresenting) { dbgSprite.visible = false; return; }
+  const now = performance.now();
+  // Auto-shows for the first few seconds of a session so the reported stick values
+  // can be read without editing the URL (the APK start URL is fixed anyway).
+  if (!DEBUG && now > (state.dbgUntil || 0)) { dbgSprite.visible = false; return; }
+  if (now - dbgAt < 200) { return; }
+  dbgAt = now;
+  drawDebug();
+  headCam().getWorldPosition(tmpV);
+  headCam().getWorldQuaternion(tmpQ);
+  tmpV2.set(0.34, -0.26, -0.9).applyQuaternion(tmpQ).add(tmpV);
+  dbgSprite.position.copy(tmpV2);
+  dbgSprite.visible = true;
 }
 
 function updateHint(hoverRec) {
@@ -668,6 +732,28 @@ function roomAt(x, z, y) {
   return y > -0.1 ? '室内' : '室外';
 }
 
+// The `connected` event hands over an input source whose .gamepad can still be
+// null at that moment, and nothing ever refreshed it afterwards - so `info.gamepad`
+// stayed null forever and the sticks were dead while the trigger (which arrives as
+// a separate XR event) kept working. Re-read it from the live session every frame.
+function liveInput(c) {
+  const session = renderer.xr.getSession ? renderer.xr.getSession() : null;
+  let src = null;
+  if (session && session.inputSources) {
+    const list = Array.from(session.inputSources);
+    // Match by handedness first: three.js assigns controller slots by input-source
+    // order, which is not guaranteed to line up with left/right.
+    if (c.hand === 'left' || c.hand === 'right') {
+      src = list.find((s) => s.handedness === c.hand) || null;
+    }
+    if (!src) src = list[c.index] || null;
+  }
+  return {
+    gp: (src && src.gamepad) || c.gamepad || null,
+    hand: (src && src.handedness) || c.hand || 'none',
+  };
+}
+
 // Quest controllers follow the xr-standard gamepad layout: the thumbstick lives in
 // axes[2]/axes[3], while axes[0]/axes[1] are the touchpad slot and read 0 because
 // Quest controllers have no touchpad. Reading [0]/[1] is why both sticks felt dead.
@@ -678,8 +764,9 @@ function stickAxes(gp) {
   return [gp.axes[0] || 0, gp.axes[1] || 0];
 }
 
-function handOf(c) {
-  if (c.hand === 'left' || c.hand === 'right') return c.hand;
+function handOf(c, hand) {
+  const h = hand || c.hand;
+  if (h === 'left' || h === 'right') return h;
   // Some runtimes report handedness 'none'; fall back to the controller index.
   return c.index === 0 ? 'left' : 'right';
 }
@@ -689,14 +776,21 @@ function handOf(c) {
 // one piece of XR behaviour that cannot be checked from a desktop run.
 function stickIntent() {
   let mx = 0, mz = 0, turn = 0;
+  state.inputs = [];
   for (const c of controllers) {
-    const gp = c.gamepad;
+    const { gp, hand } = liveInput(c);
+    if (gp && gp.axes) {
+      state.inputs.push({ i: c.index, hand: handOf(c, hand),
+                          a: [gp.axes[0] || 0, gp.axes[1] || 0, gp.axes[2] || 0, gp.axes[3] || 0]
+                               .map((v) => +v.toFixed(2)),
+                          b: gp.buttons ? gp.buttons.length : 0 });
+    }
     if (!gp || !gp.axes) continue;
     const [ax, ay] = stickAxes(gp);
-    const hand = handOf(c);
-    if (hand === 'right') {
+    const h = handOf(c, hand);
+    if (h === 'right') {
       if (Math.hypot(ax, ay) > 0.18) { mx = ax; mz = -ay; }
-    } else if (hand === 'left') {
+    } else if (h === 'left') {
       if (Math.abs(ax) > 0.22) turn = ax;
     }
   }
@@ -816,6 +910,7 @@ renderer.setAnimationLoop((t) => {
       if (c.hover && !hoverLabel) hoverLabel = c.hover.label;
     }
     ({ mx, mz, turn } = stickIntent());
+    state.lastIntent = { mx, mz, turn };
     if (mx || mz) {
       headCam().getWorldQuaternion(tmpQ);
       tmpV.set(0, 0, -1).applyQuaternion(tmpQ); tmpV.y = 0;
@@ -867,6 +962,7 @@ renderer.setAnimationLoop((t) => {
   if (renderer.xr.isPresenting) {
     const hov = (controllers.find((c) => c.hover) || {}).hover || null;
     updateHint(hov);
+    updateDebug();
   }
   renderer.render(scene, camera);
 });
@@ -895,6 +991,7 @@ async function enterVR() {
     // Show the controls card on entry; the first trigger press dismisses it.
     intro.visible = true;
     introPlaced = false;
+    state.dbgUntil = performance.now() + 7000;   // input readout for the first seconds
     for (const c of controllers) c.ray.visible = true;
     log(`VR 会话已启动（${state.usingFloor ? 'local-floor' : 'local'} 参考空间）`);
     return true;
