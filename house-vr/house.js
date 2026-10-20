@@ -396,6 +396,7 @@ function placeIntro() {
 
 
 let aiming = null;
+let aimTp = null;
 
 // Cached once: getObjectByName() walked the whole scene on every controller, every
 // frame, and then raycast 1649 triangles of house shell twice per frame. That was
@@ -507,15 +508,36 @@ function onSelectEnd(info) {
   }
 }
 
+// Teleporting used to raycast the walkable planes alone, so aiming at the floor
+// picked the yard plane straight through the wall and dropped the player outside.
+// Every candidate now needs an unobstructed line from the controller.
+const tpOrigin = new THREE.Vector3();
+const tpDir = new THREE.Vector3();
+const losDir = new THREE.Vector3();
+const TELEPORT_MAX = 8.0;
+
+function hasLineOfSight(from, to) {
+  losDir.copy(to).sub(from);
+  const d = losDir.length();
+  if (d < 0.35) return true;
+  losDir.divideScalar(d);
+  raycaster.set(from, losDir);
+  raycaster.far = d - 0.12;          // stop short so the floor itself is not a hit
+  const house = getHouseMesh();
+  if (!house) return true;
+  return raycaster.intersectObject(house, false).length === 0;
+}
+
 function computeTeleport(info) {
-  info.obj.getWorldPosition(tmpV);
+  info.obj.getWorldPosition(tpOrigin);
   info.obj.getWorldQuaternion(tmpQ);
-  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(tmpQ).normalize();
-  raycaster.set(tmpV, dir);
-  raycaster.far = 20;
+  tpDir.set(0, 0, -1).applyQuaternion(tmpQ).normalize();
+  raycaster.set(tpOrigin, tpDir);
+  raycaster.far = TELEPORT_MAX;
   for (const h of raycaster.intersectObjects(proxy.children, false)) {
     const f = h.object.userData.floor;
     if (blocked(h.point.x, h.point.z, f.y)) continue;
+    if (!hasLineOfSight(tpOrigin, h.point)) continue;
     return { x: h.point.x, z: h.point.z, y: f.y, name: f.name };
   }
   return null;
@@ -642,6 +664,22 @@ function roomAt(x, z, y) {
   return y > -0.1 ? '室内' : '室外';
 }
 
+// Quest controllers follow the xr-standard gamepad layout: the thumbstick lives in
+// axes[2]/axes[3], while axes[0]/axes[1] are the touchpad slot and read 0 because
+// Quest controllers have no touchpad. Reading [0]/[1] is why both sticks felt dead.
+function stickAxes(gp) {
+  if (!gp || !gp.axes) return [0, 0];
+  const sx = gp.axes[2] || 0, sy = gp.axes[3] || 0;
+  if (Math.abs(sx) > 0.01 || Math.abs(sy) > 0.01) return [sx, sy];
+  return [gp.axes[0] || 0, gp.axes[1] || 0];
+}
+
+function handOf(c) {
+  if (c.hand === 'left' || c.hand === 'right') return c.hand;
+  // Some runtimes report handedness 'none'; fall back to the controller index.
+  return c.index === 0 ? 'left' : 'right';
+}
+
 // Right stick walks, left stick turns. Kept as a pure function of the controller
 // state so it can be exercised with fake gamepads in the browser test - it is the
 // one piece of XR behaviour that cannot be checked from a desktop run.
@@ -650,10 +688,11 @@ function stickIntent() {
   for (const c of controllers) {
     const gp = c.gamepad;
     if (!gp || !gp.axes) continue;
-    const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
-    if (c.hand === 'right') {
+    const [ax, ay] = stickAxes(gp);
+    const hand = handOf(c);
+    if (hand === 'right') {
       if (Math.hypot(ax, ay) > 0.18) { mx = ax; mz = -ay; }
-    } else if (c.hand === 'left') {
+    } else if (hand === 'left') {
       if (Math.abs(ax) > 0.22) turn = ax;
     }
   }
@@ -805,10 +844,14 @@ renderer.setAnimationLoop((t) => {
   }
 
   if (aiming) {
-    const tp = computeTeleport(aiming);
+    // The line-of-sight test walks 1649 triangles, so it runs every other frame
+    // while the trigger is held down rather than on every frame.
+    if (frameNo % 2 === 0) aimTp = computeTeleport(aiming);
+    const tp = aimTp;
     marker.visible = !!tp;
     if (tp) marker.position.set(tp.x, tp.y + 0.012, tp.z);
   } else {
+    aimTp = null;
     marker.visible = false;
   }
 
@@ -942,6 +985,19 @@ const startZ = -modelJson.entry.y - 0.6;      // inside the house means three.z 
         return stickIntent();
       },
       ui: () => ({ intro: intro.visible, hint: hintSprite.visible, hintText }),
+      // Probe the teleport solver as if a controller sat at `origin` looking along
+      // `dir`. Used to prove that aiming through a wall is refused.
+      teleportProbe: (origin, dir) => {
+        const d = new THREE.Vector3(dir[0], dir[1], dir[2]).normalize();
+        const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), d);
+        const fake = {
+          obj: {
+            getWorldPosition: (v) => v.set(origin[0], origin[1], origin[2]),
+            getWorldQuaternion: (qq) => qq.copy(q),
+          },
+        };
+        return computeTeleport(fake);
+      },
       // Median frame cost over N forced renders - the number that actually shows
       // whether the hover raycast rework removed the hitch.
       budget: (n) => {
