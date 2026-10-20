@@ -161,7 +161,7 @@ for (let i = 0; i < 2; i++) {
   line.scale.z = 1.2;
   controller.add(line);
   scene.add(controller);
-  controller.addEventListener('selectstart', onSelect);
+  controller.addEventListener('selectstart', () => onSelect(controller));
   controller.addEventListener('connected', (e) => {
     controller.userData.handedness = e.data.handedness;
     log(`手柄已连接: ${e.data.handedness}`);
@@ -225,8 +225,9 @@ function respawn(block) {
   block.userData.highlight = 0;
 }
 
-function onSelect(event) {
-  const controller = event.currentTarget;
+// three.js dispatches XR select events on the controller group without setting
+// event.currentTarget, so the controller is passed in explicitly.
+function onSelect(controller) {
   if (state.phase === 'over') { restart(); return; }
   if (state.phase !== 'playing') return;
   const origin = controller.getWorldPosition(new THREE.Vector3());
