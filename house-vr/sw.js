@@ -1,4 +1,4 @@
-const CACHE = 'house-vr-v3';
+const CACHE = 'house-vr-v4';
 const ASSETS = [
   './',
   './index.html',
@@ -29,15 +29,30 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// Stale-while-revalidate. This was network-first, which meant every launch waited
-// out the (very slow) link even with a perfect copy already in the cache - the
-// cache only ever acted as an offline fallback. Now a cached response is served
-// immediately and the network copy quietly replaces it, so the second launch
-// paints at once while a redeploy still propagates.
+// Two policies, because both failure modes hurt:
+//  - entry code (house.js, index.html) is network-first, so a redeploy is visible
+//    on the very next launch instead of one launch later;
+//  - everything else (the GLB, three.js, the loader) is cache-first, so the slow
+//    link is only paid once.
+const NETWORK_FIRST = /(?:house\.js|index\.html|\/)$/;
+
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
   const url = new URL(e.request.url);
   if (url.origin !== self.location.origin) return;
+
+  if (NETWORK_FIRST.test(url.pathname)) {
+    e.respondWith(
+      fetch(e.request).then((res) => {
+        if (res && res.ok) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(e.request, copy));
+        }
+        return res;
+      }).catch(() => caches.match(e.request, { ignoreSearch: true }))
+    );
+    return;
+  }
 
   e.respondWith(
     caches.match(e.request, { ignoreSearch: true }).then((hit) => {

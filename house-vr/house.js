@@ -21,6 +21,7 @@ import { GLTFLoader } from './vendor/GLTFLoader.js';
 
 const WALK_RADIUS = 0.28;
 const PLAYER_HEIGHT = 1.75;
+const EYE_HEIGHT = 1.65;          // used when the runtime gives no floor reference
 const WALK_SPEED = 1.9;
 const TURN_DEG = 30;
 const REACH = 2.6;                 // how far a held prop may be carried from the head
@@ -86,7 +87,7 @@ const state = {
   phase: 'loading', mode: 'teleport', feetY: 0, floorZ: 0, stepMax: 0.2,
   boxes: [], floors: [], rooms: [], hover: null, held: null,
   teleports: 0, blocked: 0, interactions: 0, usingFloor: true,
-  props: {}, lampsOn: 0, inputs: [], lastIntent: null,
+  props: {}, lampsOn: 0, inputs: [], lastIntent: null, eyeLift: null,
 };
 
 // ------------------------------------------------------------------- loading
@@ -375,6 +376,8 @@ function drawDebug() {
   }
   dctx.fillStyle = '#7f9bc9';
   dctx.font = '20px monospace';
+  dctx.fillText(`head y ${(state.poseY || 0).toFixed(2)}  lift ${(state.eyeLift || 0).toFixed(2)}  ` +
+    `feet ${(state.feetY || 0).toFixed(2)}`, 14, 158);
   dctx.fillText(`move ${state.lastIntent ? state.lastIntent.mx.toFixed(2) + ',' + state.lastIntent.mz.toFixed(2) : '-'}  turn ${state.lastIntent ? state.lastIntent.turn.toFixed(2) : '-'}`, 14, 186);
   dbgTex.needsUpdate = true;
 }
@@ -736,6 +739,15 @@ function roomAt(x, z, y) {
 // null at that moment, and nothing ever refreshed it afterwards - so `info.gamepad`
 // stayed null forever and the sticks were dead while the trigger (which arrives as
 // a separate XR event) kept working. Re-read it from the live session every frame.
+// How much the rig has to be lifted so the eyes sit at EYE_HEIGHT above the house
+// floor. A floor-relative pose already reports ~1.6 m and needs no lift; a plain
+// "local" pose reports ~0 and needs the full lift. Pure function so the mapping
+// can be asserted without a headset.
+function eyeLiftFor(poseY) {
+  if (!(poseY > 0.02)) return null;         // not measured yet
+  return poseY < 0.9 ? Math.max(0, EYE_HEIGHT - poseY) : 0;
+}
+
 function liveInput(c) {
   const session = renderer.xr.getSession ? renderer.xr.getSession() : null;
   let src = null;
@@ -771,6 +783,13 @@ function handOf(c, hand) {
   return c.index === 0 ? 'left' : 'right';
 }
 
+// Quest reports the thumbstick with the opposite sign to the Gamepad-API
+// convention this code originally assumed: on device, pushing the stick up gives
+// ay = +1 (not -1) and pushing right gives ax = -1. Both axes are negated once,
+// here, instead of scattering minus signs through the movement maths.
+const STICK_X = -1;
+const STICK_Y = -1;
+
 // Right stick walks, left stick turns. Kept as a pure function of the controller
 // state so it can be exercised with fake gamepads in the browser test - it is the
 // one piece of XR behaviour that cannot be checked from a desktop run.
@@ -789,9 +808,11 @@ function stickIntent() {
     const [ax, ay] = stickAxes(gp);
     const h = handOf(c, hand);
     if (h === 'right') {
-      if (Math.hypot(ax, ay) > 0.18) { mx = ax; mz = -ay; }
+      // push up -> walk forward, push right -> strafe right
+      if (Math.hypot(ax, ay) > 0.18) { mx = STICK_X * ax; mz = -STICK_Y * ay; }
     } else if (h === 'left') {
-      if (Math.abs(ax) > 0.22) turn = ax;
+      // push left -> turn left
+      if (Math.abs(ax) > 0.22) turn = STICK_X * ax;
     }
   }
   return { mx, mz, turn };
@@ -923,8 +944,22 @@ renderer.setAnimationLoop((t) => {
       }
     }
     if (turn) dolly.rotation.y -= turn * THREE.MathUtils.degToRad(TURN_DEG) * Math.min(1, dt * 8);
+
+    // three.js writes the headset pose into camera.position each frame, so its y
+    // says which reference space we actually got: a floor-relative pose puts the
+    // eyes around 1.6 m, while a plain "local" pose sits near 0. With local, the
+    // rig has to be lifted or the player walks around at knee height - which read
+    // as "very short person, looking under the table".
+    const poseY = camera.position.y;
+    state.poseY = poseY;
+    if (state.eyeLift === null) {
+      const lift = eyeLiftFor(poseY);
+      if (lift !== null) {
+        state.eyeLift = lift;
+        log(`视线高度校正：${lift > 0.01 ? `抬升 ${lift.toFixed(2)} m` : '无需（local-floor 生效）'}`);
+      }
+    }
     camera.rotation.set(0, 0, 0);
-    camera.position.set(0, state.usingFloor ? 0 : 1.5, 0);
   } else {
     camera.position.set(0, 1.6, 0);        // desktop preview has no headset pose
     desktopMove(dt);
@@ -932,7 +967,9 @@ renderer.setAnimationLoop((t) => {
                                 getWorldQuaternion: (q) => q.copy(headCam().getWorldQuaternion(q)) } });
     if (hit && hit.type === 'prop') hoverLabel = hit.rec.label;
   }
-  dolly.position.y = state.feetY;          // ride the floor / stairs / porch height
+  // Ride the floor / stairs / porch height, plus the head-height correction when
+  // the runtime did not give us a floor-relative pose.
+  dolly.position.y = state.feetY + (state.eyeLift || 0);
 
   for (const c of controllers) if (c.held) updateHeld(c.held);
   for (const rec of Object.values(state.props)) updateFree(rec, dt);
@@ -992,6 +1029,7 @@ async function enterVR() {
     intro.visible = true;
     introPlaced = false;
     state.dbgUntil = performance.now() + 7000;   // input readout for the first seconds
+    state.eyeLift = null;                        // re-measure the pose reference
     for (const c of controllers) c.ray.visible = true;
     log(`VR 会话已启动（${state.usingFloor ? 'local-floor' : 'local'} 参考空间）`);
     return true;
@@ -1014,6 +1052,7 @@ async function enterVR() {
 function onSessionEnd() {
   state.phase = 'desktop';
   dolly.position.y = 0;
+  state.eyeLift = null;          // the next session may get a different reference space
   el.hud.classList.remove('hidden');
   el.enter.textContent = '进入 VR';
   el.enter.disabled = false;
@@ -1086,6 +1125,7 @@ const startZ = -modelJson.entry.y - 0.6;      // inside the house means three.z 
         return stickIntent();
       },
       ui: () => ({ intro: intro.visible, hint: hintSprite.visible, hintText }),
+      eyeLift: eyeLiftFor,
       // Release a prop from a given height and run the fall for `frames` steps.
       // This is the exact path that used to leave a prop stuck in a wall.
       dropTest: (id, x, y, z, frames) => {
