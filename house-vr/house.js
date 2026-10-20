@@ -834,7 +834,12 @@ function recenter() {
 // ------------------------------------------------------------- desktop fallback
 const keys = new Set();
 let dragging = false, lastX = 0, lastY = 0, yaw = 0, pitch = 0;
-window.addEventListener('keydown', (e) => keys.add(e.code));
+window.addEventListener('keydown', (e) => {
+  keys.add(e.code);
+  // V toggles into VR from the desktop preview, so a PC-tethered headset does not
+  // require hunting for the corner button.
+  if (e.code === 'KeyV' && state.phase === 'desktop' && !renderer.xr.isPresenting) enterVR();
+});
 window.addEventListener('keyup', (e) => keys.delete(e.code));
 renderer.domElement.addEventListener('pointerdown', (e) => {
   dragging = true; lastX = e.clientX; lastY = e.clientY;
@@ -1030,10 +1035,7 @@ async function hasXRDevice() {
 
 function enterDesktopPreview() {
   state.xrUnsupported = true;
-  state.phase = 'desktop';
-  el.hud.classList.add('hidden');
-  el.fab.classList.remove('hidden');
-  el.status.textContent = '桌面预览：WASD / 方向键 移动 · 按住鼠标拖动 转视角 · 点击家具 交互';
+  backToDesktop();
   log('桌面预览已就绪（无头显时可用鼠标键盘试玩）');
 }
 
@@ -1079,14 +1081,26 @@ async function enterVR() {
   }
 }
 
-function onSessionEnd() {
+// Entering VR and coming back have to be symmetric: leaving a session used to
+// bring the title card back, which threw away the room you were standing in and
+// made "test on desktop, then try it in the headset" a restart-the-page
+// operation. Now the exit lands back in the desktop preview at the same spot.
+function backToDesktop(message) {
   state.phase = 'desktop';
-  dolly.position.y = 0;
   state.eyeLift = null;          // the next session may get a different reference space
-  el.hud.classList.remove('hidden');
-  el.enter.textContent = '进入 VR';
-  el.enter.disabled = false;
-  el.status.textContent = 'VR 会话已结束';
+  state.introDone = false;
+  state.held = null;
+  for (const c of controllers) { c.held = null; c.hover = null; }
+  dolly.rotation.y = 0;
+  if (el.hud) el.hud.classList.add('hidden');
+  if (el.fab) el.fab.classList.remove('hidden');
+  if (el.enter) { el.enter.textContent = '进入 VR'; el.enter.disabled = false; }
+  el.status.textContent = message || '桌面预览：WASD / 方向键 移动 · 按住鼠标拖动 转视角 · 点击家具 交互';
+}
+
+function onSessionEnd() {
+  backToDesktop('已退出 VR · 桌面预览（WASD 移动 · 拖动转视角 · 点击交互）');
+  log('VR 会话已结束，已回到桌面预览（位置保留）');
 }
 
 let gestureArmed = false;
@@ -1157,7 +1171,12 @@ const startZ = -modelJson.entry.y - 0.6;      // inside the house means three.z 
         }
         return stickIntent();
       },
-      ui: () => ({ intro: intro.visible, hint: hintSprite.visible, hintText }),
+      ui: () => ({ intro: intro.visible, hint: hintSprite.visible, hintText,
+                   hud: el.hud ? !el.hud.classList.contains('hidden') : null,
+                   fab: el.fab ? !el.fab.classList.contains('hidden') : null,
+                   phase: state.phase }),
+      // Exercise the VR-exit path without a headset.
+      exitVR: () => { backToDesktop(); return true; },
       eyeLift: eyeLiftFor,
       // Release a prop from a given height and run the fall for `frames` steps.
       // This is the exact path that used to leave a prop stuck in a wall.
