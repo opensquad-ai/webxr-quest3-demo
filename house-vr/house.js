@@ -206,6 +206,9 @@ for (const mesh of propMeshes) {
   // prop could settle at the wrong height or never settle at all.
   if (!mesh.userData.bb) mesh.userData.bb = new THREE.Box3().setFromObject(mesh);
   rec.half = (mesh.userData.bb.max.y - mesh.userData.bb.min.y) / 2;
+  // Offset from the prop origin up to just above its box, used to park the aim
+  // label over the object rather than at its pivot.
+  rec.hintY = mesh.userData.bb.max.y - mesh.position.y + 0.12;
   if (spec.kind === 'hinge') rec.axis = new THREE.Vector3(0, 1, 0);
   if (spec.kind === 'slide') rec.dir = new THREE.Vector3(spec.dir[0], 0, -spec.dir[1]).normalize();
   if (spec.light) {
@@ -407,8 +410,11 @@ function updateHint(hoverRec) {
   }
   if (!hintSprite.visible) return;
   if (hintTarget && hintTarget.mesh) {
-    hintSprite.position.copy(hintTarget.mesh.position);
-    hintSprite.position.y += 0.26;
+    // Prop origins sit at the floor (the geometry is built relative to y=0), so the
+    // raw position put the label on the floor instead of over the drawer.
+    hintTarget.mesh.getWorldPosition(tmpV);
+    hintSprite.position.copy(tmpV);
+    hintSprite.position.y += hintTarget.hintY || 0.3;
   } else {
     headCam().getWorldPosition(tmpV);
     hintSprite.position.copy(tmpV).setY(tmpV.y + 0.1);
@@ -867,7 +873,8 @@ function desktopMove(dt) {
   if (move.lengthSq() === 0) return;
   move.normalize().multiplyScalar(WALK_SPEED * dt);
   tryMove(move.x, move.z);
-  camera.rotation.set(pitch, yaw, 0, 'YXZ');
+  // rotation is applied in the loop, not here: dragging the mouse has to turn the
+  // view even when no movement key is held.
 }
 
 // ------------------------------------------------------------------ wrist panel
@@ -903,7 +910,7 @@ function drawPanel(hoverLabel) {
 }
 
 function draw2d(hoverLabel) {
-  el.mode.textContent = '摇杆';
+  el.mode.textContent = renderer.xr.isPresenting ? '摇杆' : 'WASD / 拖动';
   el.room.textContent = roomAt(dolly.position.x, dolly.position.z, state.feetY);
   el.hint.textContent = hoverLabel ? `瞄准：${hoverLabel}` : `灯 ${state.lampsOn} 盏亮`;
 }
@@ -963,6 +970,7 @@ renderer.setAnimationLoop((t) => {
   } else {
     camera.position.set(0, 1.6, 0);        // desktop preview has no headset pose
     desktopMove(dt);
+    camera.rotation.set(pitch, yaw, 0, 'YXZ');
     const hit = hitFor({ obj: { getWorldPosition: (v) => v.copy(headCam().getWorldPosition(v)),
                                 getWorldQuaternion: (q) => q.copy(headCam().getWorldQuaternion(q)) } });
     if (hit && hit.type === 'prop') hoverLabel = hit.rec.label;
@@ -1006,6 +1014,28 @@ renderer.setAnimationLoop((t) => {
 
 // --------------------------------------------------------------------- session
 const XR_TIMEOUT_MS = 10000;
+
+// isSessionSupported() is known to hang on some builds, so it races a short timer.
+async function hasXRDevice() {
+  if (!navigator.xr || !navigator.xr.isSessionSupported) return false;
+  try {
+    return await Promise.race([
+      navigator.xr.isSessionSupported('immersive-vr'),
+      new Promise((resolve) => setTimeout(() => resolve(false), 1500)),
+    ]);
+  } catch {
+    return false;
+  }
+}
+
+function enterDesktopPreview() {
+  state.xrUnsupported = true;
+  state.phase = 'desktop';
+  el.hud.classList.add('hidden');
+  el.fab.classList.remove('hidden');
+  el.status.textContent = '桌面预览：WASD / 方向键 移动 · 按住鼠标拖动 转视角 · 点击家具 交互';
+  log('桌面预览已就绪（无头显时可用鼠标键盘试玩）');
+}
 
 async function enterVR() {
   el.enter.disabled = true;
@@ -1102,6 +1132,9 @@ const startZ = -modelJson.entry.y - 0.6;      // inside the house means three.z 
     api: {
       blocked, groundAt, tryMove, supportAt, roomAt,
       setPos: (x, z) => { dolly.position.set(x, 0, z); const g2 = groundAt(x, z, 1.0); state.feetY = g2 ? g2.y : 0; },
+      // Desktop view is owned by the module-level yaw/pitch, which the render loop
+      // re-applies every frame; setting camera.rotation directly is overwritten.
+      setView: (y, p) => { yaw = y; pitch = p || 0; camera.rotation.set(pitch, yaw, 0, 'YXZ'); },
       act: (id) => {
         const rec = state.props[id];
         if (!rec) return false;
@@ -1169,14 +1202,15 @@ const startZ = -modelJson.entry.y - 0.6;      // inside the house means three.z 
       },
     },
   };
-  if (!navigator.xr) {
-    state.xrUnsupported = true;
-    el.status.textContent = '此浏览器不支持 WebXR；桌面预览：WASD 移动 · 按住拖动转视角 · 点击家具交互';
+  // A desktop browser advertises navigator.xr but has no headset; asking straight
+  // away leaves the title card covering the scene for ten seconds and then keeps
+  // covering it. Probe first, and on failure go straight to the mouse/keyboard
+  // preview so the walkthrough can be exercised without putting a headset on.
+  if (!(await hasXRDevice())) {
+    enterDesktopPreview();
   } else {
     const ok = await enterVR();
-    // Only auto-retry when the failure might be a missing user gesture; a browser
-    // with no headset would otherwise replay the error on every single click.
-    if (!ok && !state.xrUnsupported) armGestureRetry();
+    if (!ok) enterDesktopPreview();
   }
 }
 
