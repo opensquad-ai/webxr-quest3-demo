@@ -1,31 +1,31 @@
 {
-  "name": "WebXR Quest 3 Demo - 光环收集",
-  "short_name": "光环收集",
-  "description": "一个在 Quest 3 上用 WebXR 玩的光环收集小游戏。",
-  "id": "/",
-  "start_url": "/?source=pwa",
-  "scope": "/",
+  "name": "星轨收集者 · Quest 3 WebXR Demo",
+  "short_name": "星轨收集者",
+  "description": "在 Quest 3 上用 WebXR 玩的光环收集小游戏。",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "display_override": ["standalone", "fullscreen", "minimal-ui"],
   "orientation": "landscape",
-  "background_color": "#05060b",
-  "theme_color": "#05060b",
+  "background_color": "#05070f",
+  "theme_color": "#05070f",
   "categories": ["games", "entertainment"],
   "icons": [
     {
-      "src": "/icon-192.png",
+      "src": "./icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-512.png",
+      "src": "./icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon-maskable-512.png",
+      "src": "./icon-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
