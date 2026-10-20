@@ -1,0 +1,13 @@
+{
+  "name": "webxr-quest3-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "WebXR demo (Three.js) packaged as a Quest 3 TWA APK",
+  "type": "module",
+  "scripts": {
+    "serve": "node serve.mjs"
+  },
+  "dependencies": {
+    "three": "^0.186.1"
+  }
+}

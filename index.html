@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#05070f">
+<title>星轨收集者 · Quest 3 WebXR Demo</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icon-192.png" type="image/png">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #05070f; overflow: hidden;
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  canvas { display: block; }
+  #hud {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 18px;
+    background: radial-gradient(circle at 50% 40%, #16223f 0%, #05070f 70%);
+    color: #e8eefc; text-align: center; padding: 24px; z-index: 10;
+  }
+  #hud.hidden { display: none; }
+  h1 { margin: 0; font-size: 30px; letter-spacing: 2px; }
+  h1 small { display:block; font-size: 13px; font-weight: 400; opacity: .6; letter-spacing: 4px; margin-top: 6px; }
+  #desc { max-width: 520px; line-height: 1.7; font-size: 15px; opacity: .85; }
+  button {
+    font: inherit; font-size: 18px; padding: 14px 34px; border-radius: 999px; border: 0;
+    background: linear-gradient(135deg, #2ee6a8, #3a86ff); color: #04121f; cursor: pointer;
+    box-shadow: 0 8px 30px rgba(46,230,168,.25);
+  }
+  button:disabled { opacity: .45; cursor: default; }
+  #status { font-size: 13px; opacity: .6; min-height: 18px; }
+  #score2d { position: fixed; top: 18px; left: 20px; font-size: 15px; color: #9fb4d8; z-index: 5; }
+  #vrFab {
+    position: fixed; right: 20px; bottom: 20px; z-index: 6; font-size: 14px;
+    padding: 10px 20px; border-radius: 999px; border: 1px solid rgba(46,230,168,.5);
+    background: rgba(8,14,28,.72); color: #2ee6a8; cursor: pointer;
+  }
+  #vrFab.hidden { display: none; }
+  #log { font-size: 12px; opacity: .45; max-width: 620px; }
+</style>
+</head>
+<body>
+<div id="score2d">SCORE 0 · TIME 60s</div>
+<button id="vrFab" class="hidden">进入 VR</button>
+<div id="hud">
+  <h1>星轨收集者<small>ORBIT COLLECTOR</small></h1>
+  <p id="desc">
+    七个彩色方块在你面前缓缓环绕。<b>盯住任意一个方块 0.8 秒</b>即可收集（戴手柄也可以扳机直接锁定）。<br>
+    限时 60 秒，看看你能收集多少个。
+  </p>
+  <button id="enter">进入 VR</button>
+  <div id="status">正在检查 WebXR 支持…</div>
+  <div id="log"></div>
+</div>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.js" } }
+</script>
+<script type="module" src="./game.js"></script>
+</body>
+</html>
