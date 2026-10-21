@@ -993,12 +993,20 @@ function recenter() {
 // ------------------------------------------------------------- desktop fallback
 const keys = new Set();
 let dragging = false, lastX = 0, lastY = 0, yaw = 0, pitch = 0;
+const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD',
+  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+
 window.addEventListener('keydown', (e) => {
   keys.add(e.code);
+  if (renderer.xr.isPresenting) return;
+  // The diorama is a still camera, so WASD there reads as "the keyboard is broken".
+  // Pressing a movement key is the clearest possible request to go and walk, so drop
+  // into first person instead of silently ignoring it.
+  if (state.view === 'orbit' && MOVE_KEYS.has(e.code)) setView('first');
   // V toggles into VR from the desktop preview, so a PC-tethered headset does not
   // require hunting for the corner button.
-  if (e.code === 'KeyF' && !renderer.xr.isPresenting) setView(state.view === 'orbit' ? 'first' : 'orbit');
-  if (e.code === 'KeyV' && state.phase === 'desktop' && !renderer.xr.isPresenting) enterVR();
+  if (e.code === 'KeyF') setView(state.view === 'orbit' ? 'first' : 'orbit');
+  if (e.code === 'KeyV' && state.phase === 'desktop') enterVR();
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
 renderer.domElement.addEventListener('pointerdown', (e) => {
@@ -1325,6 +1333,9 @@ const startZ = -modelJson.entry.y;            // bl.y -> three.z, no inward offs
       // Desktop view is owned by the module-level yaw/pitch, which the render loop
       // re-applies every frame; setting camera.rotation directly is overwritten.
       setView: (y, p) => { yaw = y; pitch = p || 0; camera.rotation.set(pitch, yaw, 0, 'YXZ'); },
+      // Orbit vs first person. The module-level setView() owns the fog and the pose,
+      // so tests must go through it rather than poking camera.position.
+      setMode: (m) => { setView(m); return state.view; },
       act: (id) => {
         const rec = state.props[id];
         if (!rec) return false;
