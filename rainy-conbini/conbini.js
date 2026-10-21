@@ -77,9 +77,9 @@ scene.add(world);
 // Base fill for the whole shell. Down-facing surfaces (every ceiling) read the
 // ground colour outright, so it is a warm light grey rather than the near-black
 // of open ground - otherwise every ceiling renders as stained wood.
-const hemi = new THREE.HemisphereLight(0x4a5f8a, 0x0a0d14, 0.85);
+const hemi = new THREE.HemisphereLight(0x5b73a4, 0x11151f, 1.25);
 scene.add(hemi);
-const fill = new THREE.AmbientLight(0x93a8c6, 0.22);
+const fill = new THREE.AmbientLight(0x93a8c6, 0.30);
 scene.add(fill);
 
 // The lamp energies in colliders.json are authored for a path-traced bake; in a
@@ -198,10 +198,10 @@ scene.add(rain);
 // and a real planar reflector is the only way to get the sign and the lit interior
 // to smear across the asphalt. Kept at 512 so the extra pass stays cheap in a
 // headset, and it only covers the road, not the whole block.
-const reflector = new Reflector(new THREE.PlaneGeometry(30, 9.4), {
+const reflector = new Reflector(new THREE.PlaneGeometry(31.96, 8.96), {
   textureWidth: 512,
   textureHeight: 512,
-  color: 0x5a6a88,          // darkens the reflection; wet asphalt is not a mirror
+  color: 0x6a7688,          // mid tint: the shop light smears on the road without mirroring it
   clipBias: 0.003,
 });
 reflector.rotation.x = -Math.PI / 2;
@@ -241,7 +241,7 @@ function makeSignTexture() {
   g.fillText('24', 59, 50);
   g.fillStyle = '#143a31';
   g.font = 'bold 52px system-ui, sans-serif';
-  g.fillText('MORI MART', 566, 50);
+  g.fillText('MORI MART', 566, 50);   // centred in the white field right of the 24 block
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
@@ -351,16 +351,38 @@ function applyOrbit() {
   camera.lookAt(orbit.target);
 }
 
+// applyOrbit() zeroes the dolly every frame (the diorama camera works in world
+// space), so the standing pose has to be parked somewhere or pressing F drops you
+// wherever the last frame left the rig - which is the shop doorway, not the street.
+const firstPose = { x: 0, z: 6, yaw: 0, pitch: 0, set: false };
+
+function saveFirstPose() {
+  firstPose.x = dolly.position.x;
+  firstPose.z = dolly.position.z;
+  firstPose.yaw = yaw;
+  firstPose.pitch = pitch;
+  firstPose.set = true;
+}
+
 function setView(mode) {
+  if (mode === state.view) return;
+  if (state.view === 'first') saveFirstPose();
   state.view = mode;
   if (mode === 'orbit') {
     // a miniature reads better with the fog pushed back
     scene.fog.near = 26; scene.fog.far = 95;
-    log('俯瞰模式（拖动旋转 · 滚轮缩放 · V 进入街道）');
+    log('俯瞰模式（拖动旋转 · 滚轮缩放 · F 进入街道）');
   } else {
     scene.fog.near = 16; scene.fog.far = 52;
+    const px = firstPose.set ? firstPose.x : startX;
+    const pz = firstPose.set ? firstPose.z : startZ;
+    yaw = firstPose.yaw;
+    pitch = firstPose.pitch;
+    dolly.position.set(px, 0, pz);
+    const g = groundAt(px, pz, 1.0);
+    state.feetY = g ? g.y : 0;
     camera.position.set(0, 1.6, 0);
-    log('第一人称（WASD 走动 · 拖动转视角 · V 回到俯瞰）');
+    log('第一人称（WASD 走动 · 拖动转视角 · F 回到俯瞰）');
   }
 }
 
