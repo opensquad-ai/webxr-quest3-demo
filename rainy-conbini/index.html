@@ -33,9 +33,11 @@
     display: flex; gap: 12px; }
   #tags span { background: rgba(6,10,20,.62); border: 1px solid rgba(120,180,255,.18);
     padding: 4px 12px; border-radius: 999px; }
-  #vrFab { position: fixed; right: 18px; bottom: 18px; z-index: 6; font-size: 14px; padding: 10px 20px;
-    border-radius: 999px; border: 1px solid rgba(127,216,192,.5); background: rgba(6,10,20,.72);
-    color: #7fd8c0; cursor: pointer; }
+  /* Big enough to hit with a controller ray inside the headset's 2D panel; at the
+     old 14px/10px size it was easy to miss. */
+  #vrFab { position: fixed; right: 24px; bottom: 24px; z-index: 6; font-size: 20px; padding: 16px 34px;
+    border-radius: 999px; border: 1px solid rgba(127,216,192,.6); background: rgba(6,10,20,.85);
+    color: #7fd8c0; cursor: pointer; box-shadow: 0 8px 36px rgba(0,0,0,.55); }
   #vrFab.hidden { display: none; }
 </style>
 </head>

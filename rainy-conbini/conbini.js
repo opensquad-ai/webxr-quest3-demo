@@ -1071,6 +1071,9 @@ function biggestAxis(gp) {
 }
 
 function startCalibration(reason) {
+  // The entry card is parked dead centre of the view; a hint sprite sits at the same
+  // distance, so the calibration prompt would be invisible behind it.
+  intro.visible = false;
   calSession.active = true;
   calSession.step = 0;
   calSession.hold = 0;
