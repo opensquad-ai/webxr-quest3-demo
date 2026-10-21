@@ -1,0 +1,17 @@
+{
+  "name": "雨夜便利店 · VR 立体模型",
+  "short_name": "雨夜便利店",
+  "description": "Three.js 雨夜便利店场景，改写为 WebXR 沉浸式体验。原作 08102317cdw-art（MIT）。",
+  "id": "./",
+  "start_url": "index.html",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["fullscreen", "standalone"],
+  "orientation": "landscape",
+  "background_color": "#05070d",
+  "theme_color": "#05070d",
+  "icons": [
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
