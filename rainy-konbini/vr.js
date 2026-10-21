@@ -296,7 +296,14 @@
       await new Promise((r) => setTimeout(r, 100));
     }
     state.ready = !!(window.__renderer && window.__scene && window.__camera);
-    if (!state.ready) { setHint('场景加载超时，请刷新页面', '#ff8f8f'); return; }
+    const tip = document.getElementById('bootTip');
+    if (tip) tip.remove();
+    if (!state.ready) {
+      setHint('场景加载超时，请刷新页面', '#ff8f8f');
+      const t = document.getElementById('bootTip');
+      if (t) t.innerHTML = '<b style="color:#ff8f8f">加载超时</b><span>请下拉刷新或重开应用</span>';
+      return;
+    }
     if (!navigator.xr) { setHint('此浏览器没有 WebXR：鼠标拖动即可环视'); return; }
     // Deliberately no auto-enter: requesting a session while the TWA is still
     // taking the foreground produces a session the runtime never shows, and the
