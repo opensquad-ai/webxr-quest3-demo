@@ -627,10 +627,10 @@ introCanvas.width = 768; introCanvas.height = 512;
   g.textAlign = 'left';
   const rows = [
     ['右摇杆', '前后左右走动'],
-    ['左摇杆左右', '转身'],
+    ['左摇杆左右', '原地转身'],
     ['扳机', '开门 / 开冰柜 / 开关灯'],
     ['扳机指地面', '瞬移到该处'],
-    ['A / B 键', '摇杆方向不对时翻转'],
+    ['方向不对', '右手 A 翻前后 · 左手 X 翻转向'],
   ];
   let y = 186;
   for (const [k, v] of rows) {
@@ -1007,21 +1007,30 @@ function handOf(c, hand) {
 // convention this code originally assumed: on device, pushing the stick up gives
 // ay = +1 (not -1) and pushing right gives ax = -1. Both axes are negated once,
 // here, instead of scattering minus signs through the movement maths.
-// Sign of each thumbstick axis. Quest reports the opposite of the Gamepad-API
-// convention, so both are flipped - but the exact behaviour varies by runtime and
-// by whether the page is running inside a TWA shell, and getting it wrong is
-// indistinguishable from "the sticks are dead". Rather than guess, the two signs
-// are persisted and adjustable from the controllers themselves (A / B), with the
-// mapping shown in the entry card.
+// Sign of each thumbstick axis - and the two hands are NOT the same.
+//
+// Measured on Quest 3 in the TWA shell: the right stick reports the Gamepad-API
+// convention (up = -1, right = +1) while the left stick reports the opposite
+// (up = +1, left = +1). Sharing one pair of signs therefore guarantees that
+// fixing the walk breaks the turn and vice versa, which is exactly the loop the
+// previous two attempts got stuck in.
+//
+//   right: rx=+1 ry=+1  -> push up = forward, push right = strafe right
+//   left:  lx=-1        -> push left = turn left
+//
+// Still adjustable: right A flips walking fwd/back, right B flips strafe,
+// left X flips the turn. Persisted under a new key so an old {x,y} pair cannot
+// be mistaken for this shape.
 const STICK = (() => {
+  const def = { rx: 1, ry: 1, lx: -1 };
   try {
-    const v = JSON.parse(localStorage.getItem('conbini.stickSign') || 'null');
-    if (v && typeof v.x === 'number' && typeof v.y === 'number') return v;
+    const v = JSON.parse(localStorage.getItem('conbini.stickSign2') || 'null');
+    if (v && typeof v.rx === 'number' && typeof v.ry === 'number' && typeof v.lx === 'number') return v;
   } catch (_) { /* private mode */ }
-  return { x: -1, y: -1 };
+  return def;
 })();
 const saveStick = () => {
-  try { localStorage.setItem('conbini.stickSign', JSON.stringify(STICK)); } catch (_) {}
+  try { localStorage.setItem('conbini.stickSign2', JSON.stringify(STICK)); } catch (_) {}
 };
 
 // Right stick walks, left stick turns. Kept as a pure function of the controller
@@ -1043,10 +1052,10 @@ function stickIntent() {
     const h = handOf(c, hand);
     if (h === 'right') {
       // push up -> walk forward, push right -> strafe right
-      if (Math.hypot(ax, ay) > 0.18) { mx = STICK.x * ax; mz = -STICK.y * ay; }
+      if (Math.hypot(ax, ay) > 0.18) { mx = STICK.rx * ax; mz = -STICK.ry * ay; }
     } else if (h === 'left') {
       // push left -> turn left
-      if (Math.abs(ax) > 0.22) turn = STICK.x * ax;
+      if (Math.abs(ax) > 0.22) turn = STICK.lx * ax;
     }
   }
   return { mx, mz, turn };
@@ -1196,16 +1205,24 @@ renderer.setAnimationLoop((t) => {
     // mapping is adjustable at runtime instead of baked in - it persists, so this is
     // a one-time calibration rather than a per-session chore.
     for (const c of controllers) {
-      const { gp } = liveInput(c);
+      const { gp, hand } = liveInput(c);
       const pressed = (i) => !!(gp && gp.buttons && gp.buttons[i] && gp.buttons[i].pressed);
       const btnA = pressed(4), btnB = pressed(5);
+      const side = handOf(c, hand);
       if (btnA && !state.btnA) {
-        STICK.y *= -1; saveStick();
-        showHint(`前后翻转：推上 = ${STICK.y < 0 ? '前进' : '后退'}`, null, 2.4);
+        if (side === 'left') {
+          STICK.lx *= -1; saveStick();
+          showHint(`左摇杆转向翻转：推左 = ${STICK.lx < 0 ? '左转' : '右转'}`, null, 2.4);
+        } else {
+          STICK.ry *= -1; saveStick();
+          showHint(`前后翻转：推上 = ${STICK.ry > 0 ? '前进' : '后退'}`, null, 2.4);
+        }
       }
       if (btnB && !state.btnB) {
-        STICK.x *= -1; saveStick();
-        showHint(`左右翻转：推右 = ${STICK.x < 0 ? '右移' : '左移'}`, null, 2.4);
+        if (side === 'right') {
+          STICK.rx *= -1; saveStick();
+          showHint(`左右翻转：推右 = ${STICK.rx > 0 ? '右移' : '左移'}`, null, 2.4);
+        }
       }
       state.btnA = btnA; state.btnB = btnB;
     }
