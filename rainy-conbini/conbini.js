@@ -77,21 +77,22 @@ scene.add(world);
 // Base fill for the whole shell. Down-facing surfaces (every ceiling) read the
 // ground colour outright, so it is a warm light grey rather than the near-black
 // of open ground - otherwise every ceiling renders as stained wood.
-const hemi = new THREE.HemisphereLight(0x5b73a4, 0x11151f, 1.25);
+const hemi = new THREE.HemisphereLight(0x5c7398, 0x0c1018, 0.80);
 scene.add(hemi);
-const fill = new THREE.AmbientLight(0x93a8c6, 0.30);
+const fill = new THREE.AmbientLight(0x8296b4, 0.12);
 scene.add(fill);
 
 // The lamp energies in colliders.json are authored for a path-traced bake; in a
 // Lambert shader a ceiling light 0.6 m from the ceiling at 26 cd is ~70x over
 // white. Scale them at build time instead of editing the shared source of truth.
-const LAMP_SCALE = 0.46;
+const LAMP_SCALE = 0.62;
 
 const state = {
   phase: 'loading', mode: 'teleport', feetY: 0, floorZ: 0, stepMax: 0.2,
   boxes: [], floors: [], rooms: [], hover: null, held: null,
   teleports: 0, blocked: 0, interactions: 0, usingFloor: true,
   props: {}, lampsOn: 0, inputs: [], lastIntent: null, eyeLift: null,
+  btnA: false, btnB: false,
   view: 'orbit',   // 'orbit' = the diorama view, 'first' = standing inside
 };
 
@@ -171,14 +172,14 @@ function makeRain(count) {
     const x = (Math.random() - 0.5) * 34;
     const z = (Math.random() - 0.5) * 34;
     const y = Math.random() * 14;
-    const len = 0.20 + Math.random() * 0.20;
+    const len = 0.55 + Math.random() * 0.55;
     pos[i * 6 + 0] = x;      pos[i * 6 + 1] = y;       pos[i * 6 + 2] = z;
     pos[i * 6 + 3] = x + 0.015; pos[i * 6 + 4] = y - len; pos[i * 6 + 5] = z;
     speed[i] = 7 + Math.random() * 5;
   }
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   const mat = new THREE.LineBasicMaterial({ color: 0x9fc0e0, transparent: true,
-                                            opacity: 0.17, depthWrite: false });
+                                            opacity: 0.055, depthWrite: false });
   const rain = new THREE.LineSegments(geo, mat);
   rain.frustumCulled = false;
   rain.userData.speed = speed;
@@ -187,11 +188,11 @@ function makeRain(count) {
 
 // the shopfront is the light source of the whole corner: a broad warm spill in
 // front of the doors is what makes the wet asphalt glow in the reference image
-const spill = new THREE.PointLight(0xffb066, 16.0, 14.0, 2.0);
+const spill = new THREE.PointLight(0xffb066, 21.0, 15.0, 2.0);
 spill.position.set(0, 2.3, 1.6);
 scene.add(spill);
 
-const rain = makeRain(1100);
+const rain = makeRain(760);
 scene.add(rain);
 
 // Wet road. The brief is explicit that the reflection matters more than the drops,
@@ -315,7 +316,7 @@ for (const mesh of propMeshes) {
   if (spec.light) {
     const room = state.rooms.find((r) => r.label === worldJson.rooms[spec.light.room].label);
     const bb = boxOf(mesh);
-    const light = new THREE.PointLight(0xffd9a8, spec.light.energy * LAMP_SCALE, 6.5, 2);
+    const light = new THREE.PointLight(0xffd9a8, spec.light.energy * LAMP_SCALE, 13.0, 2);
     light.position.set(bb.min.x + (bb.max.x - bb.min.x) / 2, bb.min.y - 0.12,
                        bb.min.z + (bb.max.z - bb.min.z) / 2);
     light.userData.base = spec.light.energy * LAMP_SCALE;
@@ -332,7 +333,7 @@ setLamp('lamp_living', true);       // apply initial on/off look
 // The reference material is an isometric miniature, while the VR requirement is
 // first person. Both views run off the same scene: this rig frames the block the
 // way the reference does, and pressing V (or the button) drops you into the street.
-const orbit = { radius: 26, theta: 0.55, phi: 0.86, target: new THREE.Vector3(0, 1.8, 0) };
+const orbit = { radius: 23, theta: 0.62, phi: 1.06, target: new THREE.Vector3(-1.0, 2.1, -3.6) };
 const ORBIT_MIN_R = 14, ORBIT_MAX_R = 62;
 
 function orbitPosition(out) {
@@ -590,29 +591,29 @@ introCanvas.width = 768; introCanvas.height = 512;
   else g.fillRect(0, 0, 768, 512);
   g.strokeStyle = 'rgba(46,230,168,0.5)'; g.lineWidth = 4; g.stroke();
   g.textAlign = 'center';
-  g.fillStyle = '#2ee6a8'; g.font = 'bold 46px system-ui, sans-serif';
-  g.fillText('星轨小屋', 384, 86);
-  g.fillStyle = '#9fb4d8'; g.font = '24px system-ui, sans-serif';
-  g.fillText('Quest 3 房屋走查', 384, 126);
+  g.fillStyle = '#ffc27a'; g.font = 'bold 46px system-ui, sans-serif';
+  g.fillText('雨夜便利店', 384, 84);
+  g.fillStyle = '#8fa6c4'; g.font = '23px system-ui, sans-serif';
+  g.fillText('MORI MART · 街角', 384, 122);
   g.textAlign = 'left';
   const rows = [
     ['右摇杆', '前后左右走动'],
     ['左摇杆左右', '转身'],
-    ['扳机', '开门 / 拉抽屉 / 开关灯 / 拿起小物件'],
+    ['扳机', '开门 / 开冰柜 / 开关灯'],
     ['扳机指地面', '瞬移到该处'],
-    ['握把键', '重置提示'],
+    ['A / B 键', '摇杆方向不对时翻转'],
   ];
-  let y = 188;
+  let y = 186;
   for (const [k, v] of rows) {
-    g.fillStyle = '#ffd479'; g.font = 'bold 30px system-ui, sans-serif';
-    g.fillText(k, 72, y);
-    g.fillStyle = '#e8eefc'; g.font = '28px system-ui, sans-serif';
-    g.fillText(v, 300, y);
-    y += 52;
+    g.fillStyle = '#ffc27a'; g.font = 'bold 29px system-ui, sans-serif';
+    g.fillText(k, 64, y);
+    g.fillStyle = '#e8eefc'; g.font = '27px system-ui, sans-serif';
+    g.fillText(v, 306, y);
+    y += 50;
   }
   g.textAlign = 'center';
-  g.fillStyle = '#2ee6a8'; g.font = 'bold 28px system-ui, sans-serif';
-  g.fillText('按扳机开始', 384, 474);
+  g.fillStyle = '#7fd6a8'; g.font = 'bold 27px system-ui, sans-serif';
+  g.fillText('走到门口 · 门自动开 · 按扳机开始', 384, 470);
 }
 const introTex = new THREE.CanvasTexture(introCanvas);
 introTex.colorSpace = THREE.SRGBColorSpace;
@@ -814,6 +815,31 @@ function setLamp(id, on) {
 }
 
 // grab follows the controller. Zero allocations per frame.
+// ------------------------------------------------------------------ auto doors
+// A konbini door opens by itself; walking up to it is the entire interaction. The
+// manual trigger still works, but proximity wins so nobody ends up standing in the
+// rain pressing A at a closed sliding door.
+const DOOR_SENSE = 2.8;
+let doorT = 0;
+
+function stepAutoDoors(dt) {
+  // The diorama zeroes the dolly every frame (its camera works in world space), so
+  // dolly.position means "the player" only in first person / VR. Reading it in the
+  // diorama kept the doors permanently open.
+  const active = renderer.xr.isPresenting || state.view === 'first';
+  const dz = dolly.position.z + 0.19;      // door plane: bl.y 0.16..0.22 -> three z -0.22..-0.16
+  const near = active && Math.hypot(dolly.position.x, dz) < DOOR_SENSE;
+  doorT += ((near ? 1 : 0) - doorT) * Math.min(1, dt * 5.0);
+  const open = doorT > 0.02;
+  for (const id of ['auto_door_l', 'auto_door_r']) {
+    const rec = state.props[id];
+    if (!rec) continue;
+    rec.value = doorT * rec.spec.travel;
+    rec.mesh.position.copy(rec.home).addScaledVector(rec.dir, rec.value);
+    rec.open = open;
+  }
+}
+
 function updateHeld(rec) {
   const info = rec.held;
   if (!info) return;
@@ -952,8 +978,22 @@ function handOf(c, hand) {
 // convention this code originally assumed: on device, pushing the stick up gives
 // ay = +1 (not -1) and pushing right gives ax = -1. Both axes are negated once,
 // here, instead of scattering minus signs through the movement maths.
-const STICK_X = -1;
-const STICK_Y = -1;
+// Sign of each thumbstick axis. Quest reports the opposite of the Gamepad-API
+// convention, so both are flipped - but the exact behaviour varies by runtime and
+// by whether the page is running inside a TWA shell, and getting it wrong is
+// indistinguishable from "the sticks are dead". Rather than guess, the two signs
+// are persisted and adjustable from the controllers themselves (A / B), with the
+// mapping shown in the entry card.
+const STICK = (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem('conbini.stickSign') || 'null');
+    if (v && typeof v.x === 'number' && typeof v.y === 'number') return v;
+  } catch (_) { /* private mode */ }
+  return { x: -1, y: -1 };
+})();
+const saveStick = () => {
+  try { localStorage.setItem('conbini.stickSign', JSON.stringify(STICK)); } catch (_) {}
+};
 
 // Right stick walks, left stick turns. Kept as a pure function of the controller
 // state so it can be exercised with fake gamepads in the browser test - it is the
@@ -974,10 +1014,10 @@ function stickIntent() {
     const h = handOf(c, hand);
     if (h === 'right') {
       // push up -> walk forward, push right -> strafe right
-      if (Math.hypot(ax, ay) > 0.18) { mx = STICK_X * ax; mz = -STICK_Y * ay; }
+      if (Math.hypot(ax, ay) > 0.18) { mx = STICK.x * ax; mz = -STICK.y * ay; }
     } else if (h === 'left') {
       // push left -> turn left
-      if (Math.abs(ax) > 0.22) turn = STICK_X * ax;
+      if (Math.abs(ax) > 0.22) turn = STICK.x * ax;
     }
   }
   return { mx, mz, turn };
@@ -1122,6 +1162,24 @@ renderer.setAnimationLoop((t) => {
       }
       if (c.hover && !hoverLabel) hoverLabel = c.hover.label;
     }
+    // A / B flip one axis each. Quest hands the sticks over with the opposite sign
+    // and the convention differs between Quest Browser and the TWA shell, so the
+    // mapping is adjustable at runtime instead of baked in - it persists, so this is
+    // a one-time calibration rather than a per-session chore.
+    for (const c of controllers) {
+      const { gp } = liveInput(c);
+      const pressed = (i) => !!(gp && gp.buttons && gp.buttons[i] && gp.buttons[i].pressed);
+      const btnA = pressed(4), btnB = pressed(5);
+      if (btnA && !state.btnA) {
+        STICK.y *= -1; saveStick();
+        showHint(`前后翻转：推上 = ${STICK.y < 0 ? '前进' : '后退'}`, null, 2.4);
+      }
+      if (btnB && !state.btnB) {
+        STICK.x *= -1; saveStick();
+        showHint(`左右翻转：推右 = ${STICK.x < 0 ? '右移' : '左移'}`, null, 2.4);
+      }
+      state.btnA = btnA; state.btnB = btnB;
+    }
     ({ mx, mz, turn } = stickIntent());
     state.lastIntent = { mx, mz, turn };
     if (mx || mz) {
@@ -1168,6 +1226,7 @@ renderer.setAnimationLoop((t) => {
 
   for (const c of controllers) if (c.held) updateHeld(c.held);
   for (const rec of Object.values(state.props)) updateFree(rec, dt);
+  stepAutoDoors(dt);
   for (const rec of Object.values(state.props)) {
     const hot = rec === state.held || controllers.some((c) => c.hover === rec);
     const target = hot ? 1.08 : 1.0;

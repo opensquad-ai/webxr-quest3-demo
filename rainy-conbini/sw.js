@@ -1,4 +1,4 @@
-const CACHE = 'conbini-vr-v1';
+const CACHE = 'conbini-vr-v2';
 const ASSETS = [
   './',
   './index.html',
