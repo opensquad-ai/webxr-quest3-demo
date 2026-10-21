@@ -23,36 +23,42 @@
 
   const state = {
     ready: false, presenting: false, view: null, moves: 0, turns: 0, resets: 0,
-    views: null, error: null,
+    views: null, error: null, visibility: null, attempts: 0, stuckTimer: null,
   };
 
   const V = () => new (window.__camera.position.constructor)();
   const Q = () => new (window.__camera.quaternion.constructor)();
 
   // ------------------------------------------------------------------ overlay UI
+  // Centred and large so a controller can hit it inside a 2D panel; the wrapper
+  // ignores pointer events so the original orbit controls keep working.
   const ui = document.createElement('div');
   Object.assign(ui.style, {
-    position: 'fixed', right: '16px', bottom: '16px', zIndex: 99999,
+    position: 'fixed', left: '50%', top: '50%', transform: 'translate(-50%,-50%)',
+    zIndex: 99999, textAlign: 'center', pointerEvents: 'none',
     font: '13px/1.5 system-ui, -apple-system, "Microsoft YaHei", sans-serif',
-    color: '#cfe3ff', textAlign: 'right', userSelect: 'none',
+    color: '#cfe3ff', userSelect: 'none',
   });
   const btn = document.createElement('button');
   btn.textContent = '进入 VR';
   Object.assign(btn.style, {
-    font: 'inherit', fontSize: '15px', padding: '11px 22px', borderRadius: '999px',
-    border: '1px solid rgba(46,230,168,.6)', background: 'rgba(8,14,28,.85)',
+    pointerEvents: 'auto', font: 'inherit', fontSize: '19px',
+    padding: '16px 34px', borderRadius: '999px',
+    border: '1px solid rgba(46,230,168,.7)', background: 'rgba(8,14,28,.88)',
     color: '#2ee6a8', cursor: 'pointer',
+    boxShadow: '0 8px 40px rgba(0,0,0,.55)',
   });
   const hint = document.createElement('div');
   Object.assign(hint.style, {
-    marginTop: '8px', padding: '6px 10px', borderRadius: '8px',
-    background: 'rgba(8,14,28,.7)', color: '#8fa6c8', fontSize: '12px',
+    marginTop: '10px', padding: '7px 12px', borderRadius: '8px',
+    background: 'rgba(8,14,28,.75)', color: '#8fa6c8', fontSize: '12px',
+    display: 'inline-block',
   });
-  ui.append(btn, hint);
+  ui.append(btn, document.createElement('br'), hint);
   document.body.appendChild(ui);
 
   const setHint = (text, color) => { hint.textContent = text; hint.style.color = color || '#8fa6c8'; };
-  setHint('头显：左摇杆走动 · 右摇杆转身 · 握把切俯瞰 · 扳机回起点');
+  setHint('按一下这个按钮（或按手柄扳机）进入 VR');
 
   // ------------------------------------------------------------------- geometry
   // Measured once: ground height, the point the framing camera looks at, and the
@@ -166,6 +172,30 @@
       });
       session.addEventListener('end', leave);
 
+      state.visibility = session.visibilityState;
+      session.addEventListener('visibilitychange', () => {
+        state.visibility = session.visibilityState;
+        if (state.visibility === 'visible' && state.stuckTimer) {
+          clearTimeout(state.stuckTimer);
+          state.stuckTimer = null;
+        }
+      });
+
+      // The runtime can hand back a session that never becomes visible (it happens
+      // when the request races the app's own launch transition). The XR frame loop
+      // then never ticks: the picture freezes and inputSources stays empty. Watch
+      // for that and end the session so the next trigger press starts clean.
+      if (state.stuckTimer) clearTimeout(state.stuckTimer);
+      state.stuckTimer = setTimeout(() => {
+        state.stuckTimer = null;
+        if (state.presenting && session.visibilityState !== 'visible') {
+          state.error = 'session stayed hidden';
+          state.visibility = session.visibilityState;
+          setHint('系统没把 VR 会话切到前台 —— 再按一次扳机重试', '#ffd479');
+          try { session.end(); } catch (e) { /* already gone */ }
+        }
+      }, 2500);
+
       renderer.setAnimationLoop(frame);
       state.presenting = true;
       state.error = null;
@@ -260,19 +290,6 @@
 
   btn.addEventListener('click', enter);
 
-  let armed = false;
-  function armGesture() {
-    if (armed) return;
-    armed = true;
-    const retry = async () => {
-      window.removeEventListener('pointerdown', retry);
-      window.removeEventListener('keydown', retry);
-      if (!state.presenting) await enter();
-    };
-    window.addEventListener('pointerdown', retry, { passive: true });
-    window.addEventListener('keydown', retry);
-  }
-
   (async () => {
     for (let i = 0; i < 200; i++) {
       if (window.__renderer && window.__scene && window.__camera) break;
@@ -281,8 +298,11 @@
     state.ready = !!(window.__renderer && window.__scene && window.__camera);
     if (!state.ready) { setHint('场景加载超时，请刷新页面', '#ff8f8f'); return; }
     if (!navigator.xr) { setHint('此浏览器没有 WebXR：鼠标拖动即可环视'); return; }
-    const ok = await enter();
-    if (!ok && !/not supported|unsupported|no XR|NotFound|NotSupported/i.test(state.error || '')) armGesture();
+    // Deliberately no auto-enter: requesting a session while the TWA is still
+    // taking the foreground produces a session the runtime never shows, and the
+    // page sits on a frozen frame with no controllers. The button is a real user
+    // gesture, which is the path the runtime reliably promotes to focused VR.
+    setHint('按「进入 VR」进入沉浸模式（头显里用手柄指向它按扳机）', '#8fa6c8');
   })();
 
   window.__xr = { state, enter, leave, setView, measure };
