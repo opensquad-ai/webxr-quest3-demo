@@ -97,7 +97,7 @@ const state = {
   boxes: [], floors: [], rooms: [], hover: null, held: null,
   teleports: 0, blocked: 0, interactions: 0, usingFloor: true,
   props: {}, lampsOn: 0, inputs: [], lastIntent: null, eyeLift: null,
-  btnA: false, btnB: false,
+  btnY: false,
   view: 'orbit',   // 'orbit' = the diorama view, 'first' = standing inside
 };
 
@@ -1036,26 +1036,126 @@ const saveStick = () => {
 // Right stick walks, left stick turns. Kept as a pure function of the controller
 // state so it can be exercised with fake gamepads in the browser test - it is the
 // one piece of XR behaviour that cannot be checked from a desktop run.
+// ---------------------------------------------------------- stick calibration
+// Quest 3's two sticks do not agree with each other: the right one reports the
+// Gamepad convention (up = -1, right = +1) and the left one the opposite. Sharing
+// one sign pair therefore always fixed one hand and broke the other, which is
+// exactly the loop three rounds of guessing landed in.
+//
+// So the page measures instead of guessing: three prompts on first entry, four
+// steady frames each, and the axis indices + signs are stored. One-time cost per
+// browser, and it works no matter what the runtime reports.
+let CAL = (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem('conbini.cal') || 'null');
+    if (v && v.right && v.left) return v;
+  } catch (_) { /* private mode */ }
+  return null;
+})();
+
+const CAL_STEPS = [
+  { hand: 'right', kind: 'y', prompt: '推【右摇杆】到最上，保持住' },
+  { hand: 'right', kind: 'x', prompt: '推【右摇杆】到最右，保持住' },
+  { hand: 'left',  kind: 'x', prompt: '推【左摇杆】到最左，保持住' },
+];
+const CAL_ACC = { right: {}, left: {} };
+const calSession = { active: false, step: 0, hold: 0 };
+
+function biggestAxis(gp) {
+  let idx = -1, val = 0;
+  for (let i = 0; i < 4; i++) {
+    const v = gp.axes[i] || 0;
+    if (Math.abs(v) > Math.abs(val)) { idx = i; val = v; }
+  }
+  return { idx, val };
+}
+
+function startCalibration(reason) {
+  calSession.active = true;
+  calSession.step = 0;
+  calSession.hold = 0;
+  CAL_ACC.right = {}; CAL_ACC.left = {};
+  log(reason || '摇杆校准：跟着提示推三下');
+  showHint(CAL_STEPS[0].prompt, null, 120);
+}
+
+function finishCalibration() {
+  const r = CAL_ACC.right, l = CAL_ACC.left;
+  if (!r.x || !r.y || !l.x) { calSession.active = false; showHint('校准失败，用默认方向', null, 3); return; }
+  // sx/sy are chosen so that "push right" gives mx=+1 and "push up" gives mz=+1;
+  // the turn sign is inverted because positive rotation.y is a left turn in three.
+  const cal = {
+    right: { xi: r.x.idx, sx: r.x.val, yi: r.y.idx, sy: r.y.val },
+    left:  { xi: l.x.idx, sxl: -l.x.val },
+  };
+  try { localStorage.setItem('conbini.cal', JSON.stringify(cal)); } catch (_) {}
+  CAL = cal;
+  calSession.active = false;
+  log('摇杆校准完成 ' + JSON.stringify(cal));
+  showHint('校准完成 · 可以走了', null, 3);
+}
+
+function stepCalibration() {
+  const want = CAL_STEPS[calSession.step];
+  if (!want) { finishCalibration(); return; }
+  const c = controllers.find((k) => {
+    const info = liveInput(k);
+    return handOf(k, info.hand) === want.hand && info.gp;
+  });
+  if (!c) { calSession.hold = 0; return; }
+  const { gp } = liveInput(c);
+  const best = biggestAxis(gp);
+  if (best.idx >= 0 && Math.abs(best.val) > 0.55) {
+    calSession.hold += 1;
+    if (calSession.hold >= 4) {
+      CAL_ACC[want.hand][want.kind] = { idx: best.idx, val: Math.sign(best.val) };
+      calSession.step += 1;
+      calSession.hold = 0;
+      if (calSession.step < CAL_STEPS.length) {
+        showHint(CAL_STEPS[calSession.step].prompt, null, 120);
+      } else {
+        finishCalibration();
+      }
+    }
+  } else {
+    calSession.hold = Math.max(0, calSession.hold - 1);
+  }
+}
+
+// Read the sticks through the calibrated mapping. Falls back to the xr-standard
+// slots with the signs measured on this headset if the player skipped calibration.
+function readSticks(gp) {
+  const ax = (i) => ((gp && gp.axes && gp.axes[i]) || 0);
+  if (CAL) {
+    return {
+      mx: CAL.right.sx * ax(CAL.right.xi),
+      mz: CAL.right.sy * ax(CAL.right.yi),
+      turn: CAL.left.sxl * ax(CAL.left.xi),
+    };
+  }
+  const sx = ax(2), sy = ax(3);
+  const pick = (Math.abs(sx) > 0.01 || Math.abs(sy) > 0.01) ? [sx, sy] : [ax(0), ax(1)];
+  return { mx: pick[0], mz: -pick[1], turn: -pick[0] };
+}
+
 function stickIntent() {
   let mx = 0, mz = 0, turn = 0;
   state.inputs = [];
   for (const c of controllers) {
     const { gp, hand } = liveInput(c);
+    const h = handOf(c, hand);
     if (gp && gp.axes) {
-      state.inputs.push({ i: c.index, hand: handOf(c, hand),
+      state.inputs.push({ i: c.index, hand: h,
                           a: [gp.axes[0] || 0, gp.axes[1] || 0, gp.axes[2] || 0, gp.axes[3] || 0]
                                .map((v) => +v.toFixed(2)),
                           b: gp.buttons ? gp.buttons.length : 0 });
     }
-    if (!gp || !gp.axes) continue;
-    const [ax, ay] = stickAxes(gp);
-    const h = handOf(c, hand);
+    if (!gp) continue;
+    const v = readSticks(gp);
     if (h === 'right') {
-      // push up -> walk forward, push right -> strafe right
-      if (Math.hypot(ax, ay) > 0.18) { mx = STICK.rx * ax; mz = -STICK.ry * ay; }
+      if (Math.hypot(v.mx, v.mz) > 0.18) { mx = v.mx; mz = v.mz; }
     } else if (h === 'left') {
-      // push left -> turn left
-      if (Math.abs(ax) > 0.22) turn = STICK.lx * ax;
+      if (Math.abs(v.turn) > 0.22) turn = v.turn;
     }
   }
   return { mx, mz, turn };
@@ -1200,33 +1300,17 @@ renderer.setAnimationLoop((t) => {
       }
       if (c.hover && !hoverLabel) hoverLabel = c.hover.label;
     }
-    // A / B flip one axis each. Quest hands the sticks over with the opposite sign
-    // and the convention differs between Quest Browser and the TWA shell, so the
-    // mapping is adjustable at runtime instead of baked in - it persists, so this is
-    // a one-time calibration rather than a per-session chore.
+    // Left Y re-runs the calibration. Nothing else needed: the measurement is the
+    // source of truth, so there is no per-axis sign to fiddle with by hand.
     for (const c of controllers) {
       const { gp, hand } = liveInput(c);
       const pressed = (i) => !!(gp && gp.buttons && gp.buttons[i] && gp.buttons[i].pressed);
-      const btnA = pressed(4), btnB = pressed(5);
-      const side = handOf(c, hand);
-      if (btnA && !state.btnA) {
-        if (side === 'left') {
-          STICK.lx *= -1; saveStick();
-          showHint(`左摇杆转向翻转：推左 = ${STICK.lx < 0 ? '左转' : '右转'}`, null, 2.4);
-        } else {
-          STICK.ry *= -1; saveStick();
-          showHint(`前后翻转：推上 = ${STICK.ry > 0 ? '前进' : '后退'}`, null, 2.4);
-        }
-      }
-      if (btnB && !state.btnB) {
-        if (side === 'right') {
-          STICK.rx *= -1; saveStick();
-          showHint(`左右翻转：推右 = ${STICK.rx > 0 ? '右移' : '左移'}`, null, 2.4);
-        }
-      }
-      state.btnA = btnA; state.btnB = btnB;
+      const btnY = handOf(c, hand) === 'left' && pressed(5);
+      if (btnY && !state.btnY) startCalibration('重新校准摇杆');
+      state.btnY = btnY;
     }
-    ({ mx, mz, turn } = stickIntent());
+    if (calSession.active) stepCalibration();
+    ({ mx, mz, turn } = calSession.active ? { mx: 0, mz: 0, turn: 0 } : stickIntent());
     state.lastIntent = { mx, mz, turn };
     if (mx || mz) {
       headCam().getWorldQuaternion(tmpQ);
@@ -1346,6 +1430,7 @@ async function enterVR() {
     el.status.textContent = '';
     if (state.view === 'orbit') setView('first');
     state.phase = 'presenting';
+    if (!CAL) startCalibration('首次进入：先量一下摇杆方向');
     // Show the controls card on entry; the first trigger press dismisses it.
     intro.visible = true;
     introPlaced = false;
@@ -1455,6 +1540,17 @@ const startZ = -modelJson.entry.y;            // bl.y -> three.z, no inward offs
                  pos: rec.mesh.position.toArray().map((v) => +v.toFixed(3)),
                  rotY: +rec.mesh.rotation.y.toFixed(3), lightVisible: rec.light ? rec.light.visible : null };
       },
+      // Drive the calibrated mapping directly: {right:{xi,sx,yi,sy}, left:{xi,sxl}}.
+      cal: (v) => {
+        CAL = v;
+        try {
+          if (v) localStorage.setItem('conbini.cal', JSON.stringify(v));
+          else localStorage.removeItem('conbini.cal');
+        } catch (_) {}
+        return CAL;
+      },
+      readSticks: (axes) => readSticks({ axes }),
+      calibrating: () => calSession.active,
       // Fake both gamepads so the stick mapping can be asserted without a headset.
       sticks: (rightAxes, leftAxes) => {
         for (const c of controllers) {
