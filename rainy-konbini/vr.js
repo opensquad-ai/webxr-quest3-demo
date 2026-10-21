@@ -134,6 +134,7 @@
     const scene = window.__scene;
     const camera = window.__camera;
     if (!renderer || !scene || !camera) { setHint('场景还在加载…', '#ffd479'); return false; }
+    if (state.presenting) return true;
     if (!navigator.xr) { setHint('此浏览器没有 WebXR：用鼠标拖动环视即可', '#ffd479'); return false; }
     btn.disabled = true;
     btn.textContent = '正在进入 VR…';
@@ -309,7 +310,13 @@
     // taking the foreground produces a session the runtime never shows, and the
     // page sits on a frozen frame with no controllers. The button is a real user
     // gesture, which is the path the runtime reliably promotes to focused VR.
-    setHint('按「进入 VR」进入沉浸模式（头显里用手柄指向它按扳机）', '#8fa6c8');
+    setHint('按「进入 VR」进入沉浸模式（手柄扳机点一下画面即可）', '#8fa6c8');
+    const pressOnce = () => {
+      if (state.presenting) return;
+      document.removeEventListener('pointerdown', pressOnce, true);
+      enter();
+    };
+    document.addEventListener('pointerdown', pressOnce, true);
   })();
 
   window.__xr = { state, enter, leave, setView, measure };
