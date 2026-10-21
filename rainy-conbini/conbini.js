@@ -18,7 +18,6 @@
 
 import * as THREE from 'three';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
-import { Reflector } from 'three/addons/objects/Reflector.js';
 
 const WALK_RADIUS = 0.28;
 const PLAYER_HEIGHT = 1.75;
@@ -77,8 +76,14 @@ scene.add(world);
 // Base fill for the whole shell. Down-facing surfaces (every ceiling) read the
 // ground colour outright, so it is a warm light grey rather than the near-black
 // of open ground - otherwise every ceiling renders as stained wood.
-const hemi = new THREE.HemisphereLight(0x5c7398, 0x0c1018, 0.80);
+const hemi = new THREE.HemisphereLight(0x5c7398, 0x0c1018, 0.62);
 scene.add(hemi);
+// A weak moon. Roofs and the road are horizontal, so the hemisphere's sky term is
+// all they get and they sank to black; a directional light puts them back without
+// brightening the vertical faces the shopfront already lights.
+const moon = new THREE.DirectionalLight(0x9db2d4, 0.95);
+moon.position.set(-14, 28, 12);
+scene.add(moon);
 const fill = new THREE.AmbientLight(0x8296b4, 0.12);
 scene.add(fill);
 
@@ -138,8 +143,15 @@ state.rooms = Object.entries(worldJson.rooms).map(([k, r]) => ({
 
 const houseMat = new THREE.MeshLambertMaterial({ vertexColors: true });
 const groundMat = new THREE.MeshLambertMaterial({ map: makeGroundTexture() });
+// Shop windows: barely-there so the lit interior reads through them.
 const glassMat = new THREE.MeshBasicMaterial({
-  color: 0xbcd6f0, transparent: true, opacity: 0.22, depthWrite: false,
+  color: 0xa8c4dc, transparent: true, opacity: 0.15, depthWrite: false,
+});
+// The sliding doors are the one piece of glass that has to be *visible* - at night a
+// transparent panel reads as a hole, which is why "there is no door" was a fair
+// complaint. Dark, semi-reflective glass with a lit handle is legible at any angle.
+const doorGlassMat = new THREE.MeshLambertMaterial({
+  color: 0x40536a, transparent: true, opacity: 0.74, depthWrite: false,
 });
 
 const propMeshes = [];
@@ -153,7 +165,7 @@ gltf.scene.traverse((o) => {
     const id = o.name.slice(4);
     const spec = worldJson.interactables.find((i) => i.id === id);
     o.material = (spec && spec.glass)
-      ? glassMat
+      ? (id.startsWith('auto_door') ? doorGlassMat : glassMat)
       : new THREE.MeshLambertMaterial({ color: new THREE.Color(...(spec ? spec.color : [0.7, 0.7, 0.7])) });
     o.userData.propId = id;
     propMeshes.push(o);
@@ -172,14 +184,14 @@ function makeRain(count) {
     const x = (Math.random() - 0.5) * 34;
     const z = (Math.random() - 0.5) * 34;
     const y = Math.random() * 14;
-    const len = 0.55 + Math.random() * 0.55;
+    const len = 0.30 + Math.random() * 0.26;
     pos[i * 6 + 0] = x;      pos[i * 6 + 1] = y;       pos[i * 6 + 2] = z;
     pos[i * 6 + 3] = x + 0.015; pos[i * 6 + 4] = y - len; pos[i * 6 + 5] = z;
     speed[i] = 7 + Math.random() * 5;
   }
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   const mat = new THREE.LineBasicMaterial({ color: 0x9fc0e0, transparent: true,
-                                            opacity: 0.055, depthWrite: false });
+                                            opacity: 0.095, depthWrite: false });
   const rain = new THREE.LineSegments(geo, mat);
   rain.frustumCulled = false;
   rain.userData.speed = speed;
@@ -188,26 +200,43 @@ function makeRain(count) {
 
 // the shopfront is the light source of the whole corner: a broad warm spill in
 // front of the doors is what makes the wet asphalt glow in the reference image
-const spill = new THREE.PointLight(0xffb066, 21.0, 15.0, 2.0);
+const spill = new THREE.PointLight(0xffb066, 6.5, 12.0, 2.0);
 spill.position.set(0, 2.3, 1.6);
 scene.add(spill);
 
 const rain = makeRain(760);
 scene.add(rain);
 
-// Wet road. The brief is explicit that the reflection matters more than the drops,
-// and a real planar reflector is the only way to get the sign and the lit interior
-// to smear across the asphalt. Kept at 512 so the extra pass stays cheap in a
-// headset, and it only covers the road, not the whole block.
-const reflector = new Reflector(new THREE.PlaneGeometry(31.96, 8.96), {
-  textureWidth: 512,
-  textureHeight: 512,
-  color: 0x6a7688,          // mid tint: the shop light smears on the road without mirroring it
-  clipBias: 0.003,
-});
-reflector.rotation.x = -Math.PI / 2;
-reflector.position.set(0, 0.012, 7.5);    // Blender y -12..-3 maps to three z +3..+12
-scene.add(reflector);
+// Wet road. A planar Reflector renders the whole scene a second time and, with no
+// Fresnel term, mirrors the shopfront straight down into the player's feet - from
+// eye height that reads as a second shop rather than a wet street. A soft additive
+// glow on the asphalt is what the reference actually shows: the light smears, the
+// geometry does not.
+function makeWetGlow() {
+  const c = document.createElement('canvas');
+  c.width = 256; c.height = 256;
+  const g = c.getContext('2d');
+  const grd = g.createRadialGradient(128, 150, 10, 128, 150, 128);
+  grd.addColorStop(0.0, 'rgba(255,196,140,0.95)');
+  grd.addColorStop(0.35, 'rgba(255,170,110,0.42)');
+  grd.addColorStop(1.0, 'rgba(255,150,90,0)');
+  g.fillStyle = grd;
+  g.fillRect(0, 0, 256, 256);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+const wetGlow = new THREE.Mesh(
+  new THREE.PlaneGeometry(34, 11),
+  new THREE.MeshBasicMaterial({
+    map: makeWetGlow(), transparent: true, opacity: 0.17,
+    blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+  }),
+);
+wetGlow.rotation.x = -Math.PI / 2;
+wetGlow.position.set(0, 0.02, 4.6);      // spills from the doors out onto the road
+scene.add(wetGlow);
 
 function stepRain(dt) {
   const attr = rain.geometry.attributes.position;
