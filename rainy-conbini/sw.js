@@ -30,11 +30,11 @@ self.addEventListener('activate', (e) => {
 });
 
 // Two policies, because both failure modes hurt:
-//  - entry code (house.js, index.html) is network-first, so a redeploy is visible
+//  - entry code (conbini.js, index.html) is network-first, so a redeploy is visible
 //    on the very next launch instead of one launch later;
 //  - everything else (the GLB, three.js, the loader) is cache-first, so the slow
 //    link is only paid once.
-const NETWORK_FIRST = /(?:house\.js|index\.html|\/)$/;
+const NETWORK_FIRST = /(?:conbini\.js|index\.html|\/)$/;
 
 // three.js comes from unpkg: cross-origin, but immutable-versioned. The first cold
 // load costs ~30 s on a throttled link, every one after that should be free.

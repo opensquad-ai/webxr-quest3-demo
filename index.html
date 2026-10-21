@@ -3,33 +3,34 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0b1220">
-<title>星轨小屋 · Quest 3 房屋走查</title>
+<meta name="theme-color" content="#05070f">
+<title>雨夜便利店街角 · Quest 3</title>
 <link rel="manifest" href="./manifest.webmanifest">
 <link rel="icon" href="./icon-192.png" type="image/png">
 <style>
   :root { color-scheme: dark; }
-  html, body { margin: 0; height: 100%; background: #0b1220; }
+  html, body { margin: 0; height: 100%; background: #05070f; }
   body { display: flex; align-items: center; justify-content: center;
     font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
-    color: #9fb4d8; text-align: center; }
-  a { color: #2ee6a8; text-decoration: none; font-size: 17px;
-      border: 1px solid rgba(46,230,168,.45); border-radius: 999px;
+    color: #8fa6c4; text-align: center; }
+  a { color: #ffc27a; text-decoration: none; font-size: 17px;
+      border: 1px solid rgba(255,194,122,.45); border-radius: 999px;
       padding: 12px 26px; display: inline-block; margin-top: 10px; }
   p { margin: 6px 0; font-size: 15px; }
   .sub { font-size: 13px; opacity: .55; margin-top: 22px; }
 </style>
 <script>
   // The installed APK is a thin wrapper around this origin, so pointing the start
-  // URL at the house is enough - no repackaging needed.
-  location.replace('./house-vr/');
+  // URL at a scene is enough - no repackaging needed. The old house stays reachable
+  // at ./house-vr/ for anyone who wants to compare.
+  location.replace('./rainy-conbini/');
 </script>
 </head>
 <body>
 <div>
-  <p>正在进入「星轨小屋」房屋走查…</p>
-  <a href="./house-vr/">点这里进入</a>
-  <p class="sub"><a href="./game.html" style="border:0;padding:0;font-size:13px;opacity:.6">去玩星轨收集者</a></p>
+  <p>正在进入「雨夜便利店街角」…</p>
+  <a href="./rainy-conbini/">点这里进入</a>
+  <p class="sub"><a href="./house-vr/" style="border:0;padding:0;font-size:13px;opacity:.6">回到「星轨小屋」</a></p>
 </div>
 </body>
 </html>
